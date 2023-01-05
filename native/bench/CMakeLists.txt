@@ -53,11 +53,15 @@ if(SEAL_BUILD_BENCH)
     if(EMSCRIPTEN)
         set_target_properties(sealbench PROPERTIES LINK_FLAGS "-flto \
                                                                 -O3 \
+                                                                ../../lib/libseal-4.1.a \
+                                                                --bind \
                                                                 -s WASM=1 \
                                                                 -s ALLOW_MEMORY_GROWTH=1 \
+                                                                -s EXPORT_ES6=0 \
+                                                                -s MODULARIZE=0 \
+                                                                -s USE_ES6_IMPORT_META=0 \
                                                                 -s SINGLE_FILE=1 \
-                                                                -s MAXIMUM_MEMORY=4GB \
-                                                                --closure 1")
+                                                                -s MAXIMUM_MEMORY=4GB)
     endif()
     target_sources(sealbench
         PRIVATE
