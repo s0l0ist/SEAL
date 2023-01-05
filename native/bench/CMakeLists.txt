@@ -61,7 +61,7 @@ if(SEAL_BUILD_BENCH)
                                                                 -s MODULARIZE=0 \
                                                                 -s USE_ES6_IMPORT_META=0 \
                                                                 -s SINGLE_FILE=1 \
-                                                                -s MAXIMUM_MEMORY=4GB)
+                                                                -s MAXIMUM_MEMORY=4GB")
     endif()
     target_sources(sealbench
         PRIVATE
