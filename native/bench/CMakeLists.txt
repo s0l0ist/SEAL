@@ -3,14 +3,14 @@
 
 cmake_minimum_required(VERSION 3.13)
 
-project(SEALBench VERSION 4.1.1 LANGUAGES CXX)
+project(SEALBench VERSION 4.1.2 LANGUAGES CXX)
 
 # If not called from root CMakeLists.txt
 if(NOT DEFINED SEAL_BUILD_BENCH)
     set(SEAL_BUILD_BENCH ON)
 
     # Import Microsoft SEAL
-    find_package(SEAL 4.1.1 EXACT REQUIRED)
+    find_package(SEAL 4.1.2 EXACT REQUIRED)
 
     # Must define these variables and include macros
     set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/${OUTLIB_PATH})
@@ -53,14 +53,11 @@ if(SEAL_BUILD_BENCH)
     if(EMSCRIPTEN)
         set_target_properties(sealbench PROPERTIES LINK_FLAGS "-flto \
                                                                 -O3 \
-                                                                ../../lib/libseal-4.1.a \
-                                                                --bind \
+                                                                -lembind \
                                                                 -s WASM=1 \
                                                                 -s ALLOW_MEMORY_GROWTH=1 \
-                                                                -s EXPORT_ES6=0 \
-                                                                -s MODULARIZE=0 \
-                                                                -s SINGLE_FILE=1 \
-                                                                -s MAXIMUM_MEMORY=4GB")
+                                                                -s MAXIMUM_MEMORY=4GB \
+                                                                --closure 1")
     endif()
     target_sources(sealbench
         PRIVATE

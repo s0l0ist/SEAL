@@ -223,14 +223,6 @@ y_combinator<std::decay_t<F>> make_y_combinator(F &&f)
     return { std::forward<F>(f) };
 }
 
-/*
- * Dummy main so the linker will not perform DCE
- */
-int main()
-{
-    return 0;
-}
-
 EMSCRIPTEN_BINDINGS(SEAL)
 {
     emscripten::function("getException", &get_exception);
