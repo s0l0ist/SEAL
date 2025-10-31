@@ -249,21 +249,23 @@ EMSCRIPTEN_BINDINGS(SEAL)
     emscripten::function(
         "vecFromArrayModulus", select_overload<std::vector<Modulus>(const val &)>(&vecFromJSArrayStringModulus));
 
-    register_vector<Plaintext>("std::vector<Plaintext>");
-    register_vector<Ciphertext>("std::vector<Ciphertext>");
-    register_vector<uint8_t>("std::vector<uint8_t>");
-    register_vector<int32_t>("std::vector<int32_t>");
-    register_vector<uint32_t>("std::vector<uint32_t>");
-    register_vector<int64_t>("std::vector<int64_t>");
-    register_vector<uint64_t>("std::vector<uint64_t>");
-    register_vector<double>("std::vector<double>");
-    register_vector<std::complex<double>>("std::vector<std::complex<double>>");
-    register_vector<Modulus>("std::vector<Modulus>");
+    register_vector<Plaintext>("VectorPlaintext");
+    register_vector<Ciphertext>("VectorCiphertext");
+    register_vector<uint8_t>("VectorU8");
+    register_vector<int32_t>("VectorI32");
+    register_vector<uint32_t>("VectorU32");
+    register_vector<int64_t>("VectorI64");
+    register_vector<uint64_t>("VectorU64");
+    register_vector<double>("VectorF64");
+    register_vector<Modulus>("VectorModulus");
+    // NOTE: this causes `--emit-tsd` to fail
+    // register_vector<std::complex<double>>("VectorComplexDouble");
 
-    class_<util::HashFunction>("util::HashFunction")
+    class_<util::HashFunction>("UtilHashFunction")
         .class_property("hashBlockUint64Count", &util::HashFunction::hash_block_uint64_count)
-        .class_property("hashBlockByteCount", &util::HashFunction::hash_block_byte_count)
-        .class_function("hash", &util::HashFunction::hash, allow_raw_pointers());
+        .class_property("hashBlockByteCount", &util::HashFunction::hash_block_byte_count);
+    // NOTE: this causes `--emit-tsd` to fail
+    // .class_function("hash", &util::HashFunction::hash, allow_raw_pointers());
 
     // using parms_id_type = util::HashFunction::hash_block_type
     // using hash_block_type std::array<std::uint64_t, hash_block_uint64_count>;
@@ -496,7 +498,7 @@ EMSCRIPTEN_BINDINGS(SEAL)
         .function("copy", optional_override([](SEALContext &self, const SEALContext &copy) {
                       self = copy; // Copy via assignment overload
                   }))
-        .function("clone", optional_override([](const SEALContext &self) {
+        .function("duplicate", optional_override([](const SEALContext &self) {
                       SEALContext clone = self; // Copy via assignment overload
                       return clone;
                   }))
@@ -734,7 +736,7 @@ EMSCRIPTEN_BINDINGS(SEAL)
         .function("copy", optional_override([](RelinKeys &self, const RelinKeys &copy) {
                       self = copy; // Copy via assignment overload
                   }))
-        .function("clone", optional_override([](const RelinKeys &self) {
+        .function("duplicate", optional_override([](const RelinKeys &self) {
                       RelinKeys clone = self; // Copy via assignment overload
                       return clone;
                   }))
@@ -759,7 +761,7 @@ EMSCRIPTEN_BINDINGS(SEAL)
         .function("copy", optional_override([](GaloisKeys &self, const GaloisKeys &copy) {
                       self = copy; // Copy via assignment overload
                   }))
-        .function("clone", optional_override([](const GaloisKeys &self) {
+        .function("duplicate", optional_override([](const GaloisKeys &self) {
                       GaloisKeys clone = self; // Copy via assignment overload
                       return clone;
                   }))
@@ -767,7 +769,7 @@ EMSCRIPTEN_BINDINGS(SEAL)
                       // If the original assign was const, this will default to a copy assignment
                       self = std::move(assign);
                   }));
-    class_<Serializable<PublicKey>>("Serializable<PublicKey>")
+    class_<Serializable<PublicKey>>("SerializablePublicKey")
         .function("saveToString", optional_override([](Serializable<PublicKey> &self, compr_mode_type compr_mode) {
                       std::ostringstream buffer;
                       self.save(buffer, compr_mode);
@@ -782,7 +784,7 @@ EMSCRIPTEN_BINDINGS(SEAL)
                       std::vector<std::uint8_t> const strVector{ contents.begin(), contents.end() };
                       return strVector;
                   }));
-    class_<Serializable<RelinKeys>>("Serializable<RelinKeys>")
+    class_<Serializable<RelinKeys>>("SerializableRelinKeys")
         .function("saveToString", optional_override([](Serializable<RelinKeys> &self, compr_mode_type compr_mode) {
                       std::ostringstream buffer;
                       self.save(buffer, compr_mode);
@@ -797,7 +799,7 @@ EMSCRIPTEN_BINDINGS(SEAL)
                       std::vector<std::uint8_t> const strVector{ contents.begin(), contents.end() };
                       return strVector;
                   }));
-    class_<Serializable<GaloisKeys>>("Serializable<GaloisKeys>")
+    class_<Serializable<GaloisKeys>>("SerializableGaloisKeys")
         .function("saveToString", optional_override([](Serializable<GaloisKeys> &self, compr_mode_type compr_mode) {
                       std::ostringstream buffer;
                       self.save(buffer, compr_mode);
@@ -812,7 +814,7 @@ EMSCRIPTEN_BINDINGS(SEAL)
                       std::vector<std::uint8_t> const strVector{ contents.begin(), contents.end() };
                       return strVector;
                   }));
-    class_<Serializable<Ciphertext>>("Serializable<Ciphertext>")
+    class_<Serializable<Ciphertext>>("SerializableCiphertext")
         .function("saveToString", optional_override([](Serializable<Ciphertext> &self, compr_mode_type compr_mode) {
                       std::ostringstream buffer;
                       self.save(buffer, compr_mode);
@@ -889,7 +891,7 @@ EMSCRIPTEN_BINDINGS(SEAL)
         .function("copy", optional_override([](PublicKey &self, const PublicKey &copy) {
                       self = copy; // Copy via assignment overload
                   }))
-        .function("clone", optional_override([](const PublicKey &self) {
+        .function("duplicate", optional_override([](const PublicKey &self) {
                       PublicKey clone = self; // Copy via assignment overload
                       return clone;
                   }))
@@ -942,7 +944,7 @@ EMSCRIPTEN_BINDINGS(SEAL)
         .function("copy", optional_override([](SecretKey &self, const SecretKey &copy) {
                       self = copy; // Copy via assignment overload
                   }))
-        .function("clone", optional_override([](const SecretKey &self) {
+        .function("duplicate", optional_override([](const SecretKey &self) {
                       SecretKey clone = self; // Copy via assignment overload
                       return clone;
                   }))
@@ -996,7 +998,7 @@ EMSCRIPTEN_BINDINGS(SEAL)
         .function("copy", optional_override([](Plaintext &self, const Plaintext &copy) {
                       self = copy; // Copy via assignment overload
                   }))
-        .function("clone", optional_override([](const Plaintext &self) {
+        .function("duplicate", optional_override([](const Plaintext &self) {
                       Plaintext clone = self; // Copy via assignment overload
                       return clone;
                   }))
@@ -1068,7 +1070,7 @@ EMSCRIPTEN_BINDINGS(SEAL)
         .function("copy", optional_override([](Ciphertext &self, const Ciphertext &copy) {
                       self = copy; // Copy via assignment overload
                   }))
-        .function("clone", optional_override([](const Ciphertext &self) {
+        .function("duplicate", optional_override([](const Ciphertext &self) {
                       Ciphertext clone = self; // Copy via assignment overload
                       return clone;
                   }))
@@ -1357,7 +1359,7 @@ EMSCRIPTEN_BINDINGS(SEAL)
         .class_function("MemoryPoolHandleNew", &MemoryPoolHandle::New);
 
     class_<MemoryManager>("MemoryManager")
-        .function("GetPool", select_overload<MemoryPoolHandle(mm_prof_opt_t)>(&MemoryManager::GetPool));
+        .class_function("GetPool", select_overload<MemoryPoolHandle(mm_prof_opt_t)>(&MemoryManager::GetPool));
 
     class_<MMProf>("MMProf");
 
@@ -1402,11 +1404,4 @@ EMSCRIPTEN_BINDINGS(SEAL)
         .value("bfv", scheme_type::bfv)
         .value("ckks", scheme_type::ckks)
         .value("bgv", scheme_type::bgv);
-
-    // enum_<mm_prof_opt>("mm_prof_opt")
-    //     .value("DEFAULT", mm_prof_opt::DEFAULT)
-    //     .value("FORCE_GLOBAL", mm_prof_opt::FORCE_GLOBAL)
-    //     .value("FORCE_NEW", mm_prof_opt::FORCE_NEW)
-    //     .value("FORCE_THREAD_LOCAL", mm_prof_opt::FORCE_THREAD_LOCAL)
-    //     ;
 }
