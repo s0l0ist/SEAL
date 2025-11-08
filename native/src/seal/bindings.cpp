@@ -27,7 +27,7 @@ std::string saveToBase64Helper(const T &self, compr_mode_type mode)
 }
 
 template <typename T>
-emscripten::val saveToVecHelper(const T &self, compr_mode_type mode)
+emscripten::val saveToArrayHelper(const T &self, compr_mode_type mode)
 {
     const size_t n = self.save_size(mode);
     std::vector<uint8_t> buf(n);
@@ -45,7 +45,7 @@ void loadFromBase64Helper(T &self, SEALContext &context, const std::string &enco
 }
 
 template <typename T>
-void loadFromVecHelper(T &self, SEALContext &context, const emscripten::val &data)
+void loadFromArrayHelper(T &self, SEALContext &context, const emscripten::val &data)
 {
     const auto ctor = data["constructor"]["name"].as<std::string>();
     if (ctor != "Uint8Array")
@@ -64,7 +64,7 @@ void loadFromBase64HelperNoContext(T &self, const std::string &encoded)
 }
 
 template <typename T>
-void loadFromVecHelperNoContext(T &self, const emscripten::val &data)
+void loadFromArrayHelperNoContext(T &self, const emscripten::val &data)
 {
     const auto ctor = data["constructor"]["name"].as<std::string>();
     if (ctor != "Uint8Array")
@@ -239,9 +239,9 @@ EMSCRIPTEN_BINDINGS(SEAL)
         .function("isPrime", &Modulus::is_prime)
         .function("bitCount", &Modulus::bit_count)
         .function("saveToBase64", &saveToBase64Helper<Modulus>)
-        .function("saveToVec", &saveToVecHelper<Modulus>)
+        .function("saveToArray", &saveToArrayHelper<Modulus>)
         .function("loadFromBase64", &loadFromBase64HelperNoContext<Modulus>)
-        .function("loadFromVec", &loadFromVecHelperNoContext<Modulus>)
+        .function("loadFromArray", &loadFromArrayHelperNoContext<Modulus>)
         .function("setValue", optional_override([](Modulus &self, uint64_t value) { self = value; }))
         .function("value", &Modulus::value);
 
@@ -256,9 +256,9 @@ EMSCRIPTEN_BINDINGS(SEAL)
         .function("plainModulus", &EncryptionParameters::plain_modulus)
         .function("parmsId", &EncryptionParameters::parms_id)
         .function("saveToBase64", &saveToBase64Helper<EncryptionParameters>)
-        .function("saveToVec", &saveToVecHelper<EncryptionParameters>)
+        .function("saveToArray", &saveToArrayHelper<EncryptionParameters>)
         .function("loadFromBase64", &loadFromBase64HelperNoContext<EncryptionParameters>)
-        .function("loadFromVec", &loadFromVecHelperNoContext<EncryptionParameters>);
+        .function("loadFromArray", &loadFromArrayHelperNoContext<EncryptionParameters>);
 
     class_<EncryptionParameterQualifiers>("EncryptionParameterQualifiers")
         .function("parametersSet", &EncryptionParameterQualifiers::parameters_set)
@@ -339,7 +339,7 @@ EMSCRIPTEN_BINDINGS(SEAL)
                       return self->chain_index();
                   }));
 
-    class_<SEALContext>("Context")
+    class_<SEALContext>("SEALContext")
         .constructor<const EncryptionParameters &, bool, sec_level_type>()
         .function("assign", optional_override([](SEALContext &self, const SEALContext &copy) { self = copy; }))
         .function("copy", optional_override([](const SEALContext &self) { return SEALContext(self); }))
@@ -633,9 +633,9 @@ EMSCRIPTEN_BINDINGS(SEAL)
         .constructor<>()
         .function("size", &KSwitchKeys::size)
         .function("saveToBase64", &saveToBase64Helper<KSwitchKeys>)
-        .function("saveToVec", &saveToVecHelper<KSwitchKeys>)
+        .function("saveToArray", &saveToArrayHelper<KSwitchKeys>)
         .function("loadFromBase64", &loadFromBase64Helper<KSwitchKeys>)
-        .function("loadFromVec", &loadFromVecHelper<KSwitchKeys>);
+        .function("loadFromArray", &loadFromArrayHelper<KSwitchKeys>);
 
     class_<RelinKeys, base<KSwitchKeys>>("RelinKeys")
         .constructor<>()
@@ -659,16 +659,16 @@ EMSCRIPTEN_BINDINGS(SEAL)
         .function("copy", optional_override([](const GaloisKeys &self) { return GaloisKeys(self); }));
     class_<Serializable<PublicKey>>("SerializablePublicKey")
         .function("saveToBase64", &saveToBase64Helper<Serializable<PublicKey>>)
-        .function("saveToVec", &saveToVecHelper<Serializable<PublicKey>>);
+        .function("saveToArray", &saveToArrayHelper<Serializable<PublicKey>>);
     class_<Serializable<RelinKeys>>("SerializableRelinKeys")
         .function("saveToBase64", &saveToBase64Helper<Serializable<RelinKeys>>)
-        .function("saveToVec", &saveToVecHelper<Serializable<RelinKeys>>);
+        .function("saveToArray", &saveToArrayHelper<Serializable<RelinKeys>>);
     class_<Serializable<GaloisKeys>>("SerializableGaloisKeys")
         .function("saveToBase64", &saveToBase64Helper<Serializable<GaloisKeys>>)
-        .function("saveToVec", &saveToVecHelper<Serializable<GaloisKeys>>);
+        .function("saveToArray", &saveToArrayHelper<Serializable<GaloisKeys>>);
     class_<Serializable<Ciphertext>>("SerializableCiphertext")
         .function("saveToBase64", &saveToBase64Helper<Serializable<Ciphertext>>)
-        .function("saveToVec", &saveToVecHelper<Serializable<Ciphertext>>);
+        .function("saveToArray", &saveToArrayHelper<Serializable<Ciphertext>>);
 
     class_<KeyGenerator>("KeyGenerator")
         .constructor<const SEALContext &>()
@@ -724,18 +724,18 @@ EMSCRIPTEN_BINDINGS(SEAL)
         .function("assign", optional_override([](PublicKey &self, const PublicKey &copy) { self = copy; }))
         .function("copy", optional_override([](const PublicKey &self) { return PublicKey(self); }))
         .function("saveToBase64", &saveToBase64Helper<PublicKey>)
-        .function("saveToVec", &saveToVecHelper<PublicKey>)
+        .function("saveToArray", &saveToArrayHelper<PublicKey>)
         .function("loadFromBase64", &loadFromBase64Helper<PublicKey>)
-        .function("loadFromVec", &loadFromVecHelper<PublicKey>);
+        .function("loadFromArray", &loadFromArrayHelper<PublicKey>);
 
     class_<SecretKey>("SecretKey")
         .constructor<>()
         .function("assign", optional_override([](SecretKey &self, const SecretKey &copy) { self = copy; }))
         .function("copy", optional_override([](const SecretKey &self) { return SecretKey(self); }))
         .function("saveToBase64", &saveToBase64Helper<SecretKey>)
-        .function("saveToVec", &saveToVecHelper<SecretKey>)
+        .function("saveToArray", &saveToArrayHelper<SecretKey>)
         .function("loadFromBase64", &loadFromBase64Helper<SecretKey>)
-        .function("loadFromVec", &loadFromVecHelper<SecretKey>);
+        .function("loadFromArray", &loadFromArrayHelper<SecretKey>);
 
     class_<Plaintext>("Plaintext")
         .constructor<>()
@@ -754,9 +754,9 @@ EMSCRIPTEN_BINDINGS(SEAL)
         .function("assign", optional_override([](Plaintext &self, const Plaintext &copy) { self = copy; }))
         .function("copy", optional_override([](const Plaintext &self) { return Plaintext(self); }))
         .function("saveToBase64", &saveToBase64Helper<Plaintext>)
-        .function("saveToVec", &saveToVecHelper<Plaintext>)
+        .function("saveToArray", &saveToArrayHelper<Plaintext>)
         .function("loadFromBase64", &loadFromBase64Helper<Plaintext>)
-        .function("loadFromVec", &loadFromVecHelper<Plaintext>)
+        .function("loadFromArray", &loadFromArrayHelper<Plaintext>)
         .function("reserve", &Plaintext::reserve)
         .function("shrinkToFit", &Plaintext::shrink_to_fit)
         .function("release", &Plaintext::release)
@@ -796,9 +796,9 @@ EMSCRIPTEN_BINDINGS(SEAL)
         .function("assign", optional_override([](Ciphertext &self, const Ciphertext &copy) { self = copy; }))
         .function("copy", optional_override([](const Ciphertext &self) { return Ciphertext(self); }))
         .function("saveToBase64", &saveToBase64Helper<Ciphertext>)
-        .function("saveToVec", &saveToVecHelper<Ciphertext>)
+        .function("saveToArray", &saveToArrayHelper<Ciphertext>)
         .function("loadFromBase64", &loadFromBase64Helper<Ciphertext>)
-        .function("loadFromVec", &loadFromVecHelper<Ciphertext>)
+        .function("loadFromArray", &loadFromArrayHelper<Ciphertext>)
         .function("reserve", select_overload<void(const SEALContext &, std::size_t)>(&Ciphertext::reserve))
         .function("resize", select_overload<void(std::size_t)>(&Ciphertext::resize))
         .function("release", &Ciphertext::release)
