@@ -54,10 +54,10 @@ if(SEAL_BUILD_BENCH)
         set_target_properties(sealbench PROPERTIES LINK_FLAGS "-flto \
                                                                 -O3 \
                                                                 -lembind \
+                                                                -s USE_CLOSURE_COMPILER=1 \
                                                                 -s WASM=1 \
                                                                 -s ALLOW_MEMORY_GROWTH=1 \
-                                                                -s MAXIMUM_MEMORY=4GB \
-                                                                --closure 1")
+                                                                -s MAXIMUM_MEMORY=4GB")
     endif()
     target_sources(sealbench
         PRIVATE
