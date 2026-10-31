@@ -10,6 +10,13 @@ macro(seal_set_language target)
         target_compile_features(${target} PUBLIC cxx_std_17)
     else()
         target_compile_features(${target} PUBLIC cxx_std_14)
+        # cxx_std_14 is only a minimum, so a compiler that defaults to C++17 or newer (e.g., GCC 11 or newer) would build
+        # as that default. Pin the standard unless the user set one, e.g., through CMAKE_CXX_STANDARD.
+        get_target_property(SEAL_TARGET_CXX_STANDARD ${target} CXX_STANDARD)
+        if(NOT SEAL_TARGET_CXX_STANDARD)
+            set_target_properties(${target} PROPERTIES CXX_STANDARD 14)
+        endif()
+        unset(SEAL_TARGET_CXX_STANDARD)
     endif()
 endmacro()
 
@@ -25,12 +32,6 @@ endmacro()
 # Set the VERSION property
 macro(seal_set_version target)
     set_target_properties(${target} PROPERTIES VERSION ${SEAL_VERSION})
-endmacro()
-
-# Set the library filename to reflect version
-macro(seal_set_version_filename target)
-    set_target_properties(${target} PROPERTIES
-        OUTPUT_NAME ${target}-${SEAL_VERSION_MAJOR}.${SEAL_VERSION_MINOR})
 endmacro()
 
 # Set the SOVERSION property
@@ -77,6 +78,17 @@ macro(seal_install_target target export)
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endmacro()
+
+# Check that a C++ program compiles and runs successfully. A cross-compiled program can be run only with
+# CMAKE_CROSSCOMPILING_EMULATOR, so without one the program is only compiled; check_cxx_source_runs would instead
+# fail the first configuration with a try_run error.
+function(seal_check_cxx_program source result_var)
+    if(CMAKE_CROSSCOMPILING AND NOT CMAKE_CROSSCOMPILING_EMULATOR)
+        check_cxx_source_compiles("${source}" ${result_var})
+    else()
+        check_cxx_source_runs("${source}" ${result_var})
+    endif()
+endfunction()
 
 macro(seal_combine_archives target dependency)
     if(MSVC)

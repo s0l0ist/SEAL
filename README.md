@@ -8,7 +8,7 @@ Microsoft SEAL is an easy-to-use open-source ([MIT licensed](LICENSE)) homomorph
 Microsoft SEAL is written in modern standard C++ and is easy to compile and run in many different environments.
 For more information about the Microsoft SEAL project, see [sealcrypto.org](https://www.microsoft.com/en-us/research/project/microsoft-seal).
 
-This document pertains to Microsoft SEAL version 4.4.
+This document pertains to Microsoft SEAL version 4.7.
 Users of previous versions of the library should look at the [list of changes](CHANGES.md).
 
 ## Contents
@@ -99,7 +99,7 @@ For applications where exact values are necessary, the BFV and BGV schemes are m
 
 There are multiple ways of installing Microsoft SEAL and starting to use it.
 The easiest way is to use a package manager to download, build, and install the library.
-For example, [vcpkg](https://github.com/microsoft/vcpkg) works on most platforms and will be up-to-date with the latest release of Microsoft SEAL (C++17 only).
+For example, [vcpkg](https://github.com/microsoft/vcpkg) works on most platforms and will be up-to-date with the latest release of Microsoft SEAL (C++17 or newer).
 On macOS you can also use [Homebrew](https://formulae.brew.sh/formula/seal).
 On FreeBSD you can use `pkg install seal` to install [security/seal](https://www.freshports.org/security/seal/).
 The .NET library is available as a multiplatform [NuGet package](https://www.nuget.org/packages/Microsoft.Research.SEALNet).
@@ -118,16 +118,20 @@ The optional dependencies and their tested versions (other versions may work as 
 | Optional dependency                                    | Tested version | Use                                              |
 | ------------------------------------------------------ | -------------- | ------------------------------------------------ |
 | [Intel HEXL](https://github.com/IntelLabs/hexl)        | 1.2.6          | Acceleration of low-level kernels                |
-| [Microsoft GSL](https://github.com/microsoft/GSL)      | 4.2.2          | API extensions                                   |
+| [Microsoft GSL](https://github.com/microsoft/GSL)      | 5.0.1          | API extensions                                   |
 | [ZLIB](https://github.com/madler/zlib)                 | 1.3.2          | Compressed serialization                         |
 | [Zstandard](https://github.com/facebook/zstd)          | 1.5.7          | Compressed serialization (much faster than ZLIB) |
-| [GoogleTest](https://github.com/google/googletest)     | 1.17.0         | For running tests                                |
+| [GoogleTest](https://github.com/google/googletest)     | 1.18.0         | For running tests                                |
 | [GoogleBenchmark](https://github.com/google/benchmark) | 1.9.5          | For running benchmarks                           |
 
 #### Intel HEXL
 
 Intel HEXL is a library providing efficient implementations of cryptographic primitives common in homomorphic encryption.
-The acceleration is particularly evident on Intel processors with the Intel AVX512-IFMA52 instruction set.
+
+**Note:** Intel HEXL improves performance only on processors with AVX-512.
+On processors without AVX-512, most operations are slower with Intel HEXL than without it, so enable it only when the target processors have AVX-512.
+
+On processors with AVX-512, the acceleration is greatest with the AVX512-IFMA52 instruction set and coefficient modulus primes of at most 50 bits, such as those of `CoeffModulus::BFVDefault` for all values of `poly_modulus_degree` except 2048 and 32768.
 
 #### Microsoft GSL
 
@@ -150,7 +154,11 @@ If Microsoft SEAL is compiled with ZLIB or Zstandard support, compression will a
 However, it is always possible to explicitly pass `compr_mode_type::none` to serialization methods to disable compression.
 If both ZLIB and Zstandard support are enabled, Zstandard is used by default due to its much better performance.
 
-**Note:** The compression rate for a `SecretKey` can (in theory at least) reveal information about the key.
+Microsoft SEAL also provides bit-packing (`compr_mode_type::bitpack` in C++, `ComprModeType.BitPack` in .NET), which needs neither library and removes exactly the always-zero high-order bits described above, as well as low-order bits that are zero in every word, such as bits an application has cleared.
+For ciphertexts and keys it is typically smaller and faster than Zstandard, but for other data, such as plaintexts, Zstandard compresses much better.
+Bit-packing is never used by default, and objects saved with it can be loaded only by Microsoft SEAL 4.6 or later.
+
+**Note:** The compressed or bit-packed size of a `SecretKey` can (in theory at least) reveal information about the key.
 In most common applications of Microsoft SEAL the size of a `SecretKey` would not be deliberately revealed to untrusted parties.
 If this is a concern, one can always save the `SecretKey` in an uncompressed form.
 
@@ -229,6 +237,8 @@ A global install requires elevated (root or administrator) privileges.
 | Android | Android Studio |
 | FreeBSD | CMake (>= 3.22) |
 
+Microsoft SEAL requires a little-endian platform.
+
 **Note:** Microsoft SEAL compiled with Clang++ has much better runtime performance than one compiled with GNU G++.
 
 #### Building Microsoft SEAL
@@ -304,7 +314,7 @@ You can select the menu option `File / Open / Folder...` and navigate to the fol
 After opening the folder, Visual Studio will detect that this is a CMake-based project and will enable the menu command `Project / CMake settings for SEAL`.
 This will open the CMake settings editor that provides a user interface where you can create different configurations and set different CMake options.
 
-After the build completes, the output static library `seal-<version>.lib` can be found in `build\lib\` or `build\lib\Release\`.
+After the build completes, the output static library `seal.lib` can be found in `build\lib\` or `build\lib\Release\`.
 When linking with applications, using CMake as is explained in [Linking with Microsoft SEAL through CMake](#linking-with-microsoft-seal-through-cmake) is highly recommended.
 Alternatively, you need to add `native\src\` (full path) and `build\native\src\` as include directories to locate the Microsoft SEAL header files.
 
@@ -361,7 +371,7 @@ cmake -P cmake/ios_xcframework.cmake
 cmake -DBUILD_TYPE=Debug -DOUTPUT_DIR=./out -P cmake/ios_xcframework.cmake
 ```
 
-This configures and builds for both device (`iphoneos`) and simulator (`iphonesimulator`), installs both, and creates `libseal-4.4.xcframework` and `libsealc-4.4.xcframework`.
+This configures and builds for both device (`iphoneos`) and simulator (`iphonesimulator`), installs both, and creates `libseal.xcframework` and `libsealc.xcframework`.
 Both slices target `arm64`.
 Intermediate build files are placed in `out/ios-xcframework/` by default; override with `-DWORK_DIR=<path>`.
 
@@ -397,26 +407,29 @@ cmake --install $D/build-simulator --config Release --prefix $D/install-simulato
 
 # Stage headers per slice. XCFramework requires separate header trees because
 # generated files (e.g. config.h) can differ between device and simulator.
+# The Microsoft GSL headers in seal/thirdparty go to the top level.
 mkdir -p $D/staging/device $D/staging/simulator
-rsync -a $D/install-device/include/SEAL-4.4/    $D/staging/device/
-rsync -a $D/install-simulator/include/SEAL-4.4/ $D/staging/simulator/
+rsync -a --exclude thirdparty $D/install-device/include/    $D/staging/device/
+rsync -a --exclude thirdparty $D/install-simulator/include/ $D/staging/simulator/
+rsync -a $D/install-device/include/seal/thirdparty/    $D/staging/device/
+rsync -a $D/install-simulator/include/seal/thirdparty/ $D/staging/simulator/
 
 # xcodebuild refuses to overwrite an existing .xcframework output.
-rm -rf libseal-4.4.xcframework libsealc-4.4.xcframework
+rm -rf libseal.xcframework libsealc.xcframework
 
 # Create the XCFrameworks.
 xcodebuild -create-xcframework                          \
-    -library $D/install-device/lib/libseal-4.4.a        \
+    -library $D/install-device/lib/libseal.a            \
     -headers $D/staging/device                          \
-    -library $D/install-simulator/lib/libseal-4.4.a     \
+    -library $D/install-simulator/lib/libseal.a         \
     -headers $D/staging/simulator                       \
-    -output  libseal-4.4.xcframework
+    -output  libseal.xcframework
 xcodebuild -create-xcframework                          \
-    -library $D/install-device/lib/libsealc-4.4.a       \
+    -library $D/install-device/lib/libsealc.a           \
     -headers $D/staging/device                          \
-    -library $D/install-simulator/lib/libsealc-4.4.a    \
+    -library $D/install-simulator/lib/libsealc.a        \
     -headers $D/staging/simulator                       \
-    -output  libsealc-4.4.xcframework
+    -output  libsealc.xcframework
 ```
 
 </details>
@@ -466,7 +479,7 @@ em++ \
  -Wall \
  -flto \
  -O3 \
- build/lib/libseal-4.4.a \
+ build/lib/libseal.a \
  --bind \
  -o "build/bin/seal_wasm.js" \
  -s WASM=1 \
@@ -492,7 +505,7 @@ The following options can be used with CMake to configure the build. The default
 | SEAL_BUILD_TESTS       | ON / **OFF**                                                 | Build the tests to check that Microsoft SEAL works correctly.                                                                                                                                          |
 | SEAL_BUILD_BENCH       | ON / **OFF**                                                 | Build the performance benchmark.                                                                                                                                                                       |
 | SEAL_BUILD_DEPS        | **ON** / OFF                                                 | Set to `ON` to automatically download and build [optional dependencies](#optional-dependencies); otherwise CMake will attempt to locate pre-installed dependencies.                                    |
-| SEAL_USE_INTEL_HEXL    | ON / **OFF**                                                 | Set to `ON` to use Intel HEXL for low-level kernels.                                                                                                                                            |
+| SEAL_USE_INTEL_HEXL    | ON / **OFF**                                                 | Set to `ON` to use Intel HEXL for low-level kernels. This improves performance only on processors with AVX-512; see [Intel HEXL](#intel-hexl).                                                         |
 | SEAL_USE_MSGSL         | **ON** / OFF                                                 | Build with Microsoft GSL support.                                                                                                                                                                      |
 | SEAL_USE_ZLIB          | **ON** / OFF                                                 | Build with ZLIB support.                                                                                                                                                                               |
 | SEAL_USE_ZSTD          | **ON** / OFF                                                 | Build with Zstandard support.                                                                                                                                                                          |
@@ -520,7 +533,6 @@ The following options can be used with CMake to further configure the build. Mos
 | SEAL_BUILD_STATIC_SEAL_C             | ON / **OFF**              | Set to `ON` to build SEAL_C as a static library instead of a shared library.                                                                                                                                                                                                                             |
 | SEAL_DEFAULT_PRNG                    | **Blake2xb**</br>Shake256 | Microsoft SEAL supports both Blake2xb and Shake256 XOFs for generating random bytes. Blake2xb is much faster, but it is not standardized, whereas Shake256 is a FIPS standard.                                                                                                                           |
 | SEAL_USE_GAUSSIAN_NOISE              | ON / **OFF**              | Set to `ON` to use a non-constant time rounded continuous Gaussian for the error distribution; otherwise a centered binomial distribution &ndash; with slightly larger standard deviation &ndash; is used.                                                                                               |
-| SEAL_AVOID_BRANCHING                 | ON / **OFF**              | Set to `ON` to eliminate branching in critical functions when compiler has maliciously inserted flags; otherwise assume `cmov` is used.                                                                                               |
 | SEAL_SECURE_COMPILE_OPTIONS          | ON / **OFF**              | Set to `ON` to enable additional security hardening: on MSVC, Control-Flow Guard (`/guard:cf`) and Spectre mitigations (`/Qspectre`); on GCC/Clang, stack canaries (`-fstack-protector-strong`) and standard library hardening (`_GLIBCXX_ASSERTIONS`, `_LIBCPP_HARDENING_MODE_FAST`); on Linux/Android, full RELRO and a non-executable stack. Disabled by default because of potential performance impact in tight inner loops.                                                                                                                                               |
 | SEAL_USE_ALIGNED_ALLOC                    | **ON** / OFF              | Set to `ON` to use 64-byte aligned memory allocations. This can improve performance of AVX512 primitives when Intel HEXL is enabled. This depends on C++17 and is disabled on Android.                                                                                               |
 
@@ -530,7 +542,7 @@ It is very easy to link your own applications and libraries with Microsoft SEAL 
 Simply add the following to your `CMakeLists.txt`:
 
 ```PowerShell
-find_package(SEAL 4.4 REQUIRED)
+find_package(SEAL 4.7 REQUIRED)
 target_link_libraries(<your target> SEAL::seal)
 ```
 
@@ -612,6 +624,45 @@ For contributing to Microsoft SEAL, please see [CONTRIBUTING.md](CONTRIBUTING.md
 ## Citing Microsoft SEAL
 
 To cite Microsoft SEAL in academic papers, please use the following BibTeX entries.
+
+### Version 4.7
+
+```tex
+    @misc{sealcrypto,
+        title = {{M}icrosoft {SEAL} (release 4.7)},
+        howpublished = {\url{https://github.com/Microsoft/SEAL}},
+        month = oct,
+        year = 2026,
+        note = {Microsoft Research, Redmond, WA.},
+        key = {SEAL}
+    }
+```
+
+### Version 4.6
+
+```tex
+    @misc{sealcrypto,
+        title = {{M}icrosoft {SEAL} (release 4.6)},
+        howpublished = {\url{https://github.com/Microsoft/SEAL}},
+        month = oct,
+        year = 2026,
+        note = {Microsoft Research, Redmond, WA.},
+        key = {SEAL}
+    }
+```
+
+### Version 4.5
+
+```tex
+    @misc{sealcrypto,
+        title = {{M}icrosoft {SEAL} (release 4.5)},
+        howpublished = {\url{https://github.com/Microsoft/SEAL}},
+        month = oct,
+        year = 2026,
+        note = {Microsoft Research, Redmond, WA.},
+        key = {SEAL}
+    }
+```
 
 ### Version 4.4
 

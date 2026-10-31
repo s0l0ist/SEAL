@@ -390,10 +390,16 @@ namespace Microsoft.Research.SEAL
         internal static extern void Evaluator_RotateRows(IntPtr thisptr, IntPtr encrypted, int steps, IntPtr galoisKeys, IntPtr destination, IntPtr pool);
 
         [DllImport(sealc, PreserveSig = false)]
+        internal static extern void Evaluator_RotateRowsMany(IntPtr thisptr, IntPtr encrypted, ulong count, int[] steps, IntPtr galoisKeys, IntPtr[] destinations, IntPtr pool);
+
+        [DllImport(sealc, PreserveSig = false)]
         internal static extern void Evaluator_RotateColumns(IntPtr thisptr, IntPtr encrypted, IntPtr galoisKeys, IntPtr destination, IntPtr pool);
 
         [DllImport(sealc, PreserveSig = false)]
         internal static extern void Evaluator_RotateVector(IntPtr thisptr, IntPtr encrypted, int steps, IntPtr galoisKeys, IntPtr destination, IntPtr pool);
+
+        [DllImport(sealc, PreserveSig = false)]
+        internal static extern void Evaluator_RotateVectorMany(IntPtr thisptr, IntPtr encrypted, ulong count, int[] steps, IntPtr galoisKeys, IntPtr[] destinations, IntPtr pool);
 
         [DllImport(sealc, PreserveSig = false)]
         internal static extern void Evaluator_ComplexConjugate(IntPtr thisptr, IntPtr encrypted, IntPtr galoisKeys, IntPtr destination, IntPtr pool);
@@ -1020,6 +1026,12 @@ namespace Microsoft.Research.SEAL
 
         [DllImport(sealc, PreserveSig = false)]
         internal static extern void Serialization_SEALHeaderSize(out byte result);
+
+        [DllImport(sealc, PreserveSig = false)]
+        internal static extern void Serialization_FormatVersionMajor(out byte result);
+
+        [DllImport(sealc, PreserveSig = false)]
+        internal static extern void Serialization_FormatVersionMinor(out byte result);
 
         [DllImport(sealc, PreserveSig = false)]
         internal static extern void Serialization_IsSupportedComprMode(byte comprMode, out bool result);

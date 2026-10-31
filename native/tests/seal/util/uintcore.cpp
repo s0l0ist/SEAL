@@ -169,6 +169,12 @@ namespace sealtest
             set_uint(ptr1.get(), 1, 2, ptr1.get());
             ASSERT_EQ(static_cast<uint64_t>(0x1231231231231321), ptr1[0]);
             ASSERT_EQ(static_cast<uint64_t>(0), ptr1[1]);
+
+            // Self assignment to a shorter result leaves the remaining words untouched
+            ptr1[1] = 0x3213213213213211;
+            set_uint(ptr1.get(), 2, 1, ptr1.get());
+            ASSERT_EQ(static_cast<uint64_t>(0x1231231231231321), ptr1[0]);
+            ASSERT_EQ(static_cast<uint64_t>(0x3213213213213211), ptr1[1]);
         }
 
         TEST(UIntCore, IsZeroUInt)
@@ -569,6 +575,41 @@ namespace sealtest
             ASSERT_FALSE(is_less_than_uint(ptr1.get(), ptr2.get(), 2));
             ASSERT_TRUE(is_greater_than_or_equal_uint(ptr1.get(), ptr2.get(), 2));
             ASSERT_FALSE(is_less_than_or_equal_uint(ptr1.get(), ptr2.get(), 2));
+        }
+
+        TEST(UIntCore, CompareUIntDifferentSizes)
+        {
+            ASSERT_EQ(0, compare_uint(nullptr, 0, nullptr, 0));
+            ASSERT_FALSE(is_greater_than_uint(nullptr, 0, nullptr, 0));
+            ASSERT_FALSE(is_less_than_uint(nullptr, 0, nullptr, 0));
+
+            MemoryPool &pool = *global_variables::global_memory_pool;
+            auto ptr1(allocate_uint(3, pool));
+            auto ptr2(allocate_uint(2, pool));
+            ptr1[0] = 5;
+            ptr1[1] = 0;
+            ptr1[2] = 0;
+            ptr2[0] = 5;
+            ptr2[1] = 0;
+
+            // An empty operand compares as zero
+            ASSERT_EQ(1, compare_uint(ptr1.get(), 1, nullptr, 0));
+            ASSERT_EQ(-1, compare_uint(nullptr, 0, ptr2.get(), 1));
+            ASSERT_EQ(0, compare_uint(ptr1.get() + 1, 2, nullptr, 0));
+
+            // Zero high words of the longer operand do not affect the result
+            ASSERT_EQ(0, compare_uint(ptr1.get(), 3, ptr2.get(), 2));
+            ASSERT_EQ(0, compare_uint(ptr2.get(), 2, ptr1.get(), 3));
+            ptr1[0] = 4;
+            ASSERT_EQ(-1, compare_uint(ptr1.get(), 3, ptr2.get(), 2));
+            ASSERT_EQ(1, compare_uint(ptr2.get(), 2, ptr1.get(), 3));
+
+            // A nonzero high word of the longer operand decides the result
+            ptr1[2] = 1;
+            ASSERT_EQ(1, compare_uint(ptr1.get(), 3, ptr2.get(), 2));
+            ASSERT_EQ(-1, compare_uint(ptr2.get(), 2, ptr1.get(), 3));
+            ASSERT_TRUE(is_greater_than_uint(ptr1.get(), 3, ptr2.get(), 2));
+            ASSERT_TRUE(is_less_than_uint(ptr2.get(), 2, ptr1.get(), 3));
         }
 
         TEST(UIntCore, GetPowerOfTwo)

@@ -4,11 +4,14 @@
 #include "seal/dynarray.h"
 #include "seal/memorymanager.h"
 #include "seal/serialization.h"
+#include "seal/util/bitpack.h"
 #include "seal/util/common.h"
 #include "seal/util/streambuf.h"
 #include "seal/util/ztools.h"
+#include <algorithm>
 #include <stdexcept>
 #include <typeinfo>
+#include <utility>
 
 using namespace std;
 using namespace seal::util;
@@ -17,15 +20,31 @@ namespace seal
 {
     // Required for C++14 compliance: static constexpr member variables are not necessarily inlined so need to ensure
     // symbol is created.
-    constexpr compr_mode_type Serialization::compr_mode_default;
+    SEAL_CONSTEXPR_MEMBER_DEF constexpr compr_mode_type Serialization::compr_mode_default;
 
     // Required for C++14 compliance: static constexpr member variables are not necessarily inlined so need to ensure
     // symbol is created.
-    constexpr uint16_t Serialization::seal_magic;
+    SEAL_CONSTEXPR_MEMBER_DEF constexpr uint16_t Serialization::seal_magic;
 
     // Required for C++14 compliance: static constexpr member variables are not necessarily inlined so need to ensure
     // symbol is created.
-    constexpr uint8_t Serialization::seal_header_size;
+    SEAL_CONSTEXPR_MEMBER_DEF constexpr uint8_t Serialization::seal_header_size;
+
+    // Required for C++14 compliance: static constexpr member variables are not necessarily inlined so need to ensure
+    // symbol is created.
+    SEAL_CONSTEXPR_MEMBER_DEF constexpr uint8_t Serialization::format_version_major;
+
+    // Required for C++14 compliance: static constexpr member variables are not necessarily inlined so need to ensure
+    // symbol is created.
+    SEAL_CONSTEXPR_MEMBER_DEF constexpr uint8_t Serialization::format_version_minor;
+
+    // Required for C++14 compliance: static constexpr member variables are not necessarily inlined so need to ensure
+    // symbol is created.
+    SEAL_CONSTEXPR_MEMBER_DEF constexpr uint8_t Serialization::format_version_minor_ntt_ciphertext;
+
+    // Required for C++14 compliance: static constexpr member variables are not necessarily inlined so need to ensure
+    // symbol is created.
+    SEAL_CONSTEXPR_MEMBER_DEF constexpr uint8_t Serialization::format_version_minor_bitpack;
 
     namespace
     {
@@ -80,6 +99,47 @@ namespace seal
             // Generic message
             throw runtime_error("I/O error");
         }
+
+        // When loading with bounded expansion, decompression fails once its output exceeds
+        // bounded_expansion_free_bytes plus bounded_expansion_ratio times the compressed input consumed. Data loaded
+        // this way, such as key-switching keys, consists of uniformly random residues modulo primes that are 1 modulo
+        // 2n, so at least 5, and cannot compress by more than about 64 / log2(5), i.e., 28:1. The free bytes cover the
+        // empty slots of Galois keys, 8 bytes per slot and so at most 1 MiB.
+        constexpr uint64_t bounded_expansion_free_bytes = uint64_t(4) << 20;
+
+        constexpr uint64_t bounded_expansion_ratio = 64;
+
+        // Nonzero while loading the members of data loaded with bounded expansion. Objects nested in such data must
+        // not be compressed, so that the bound applies to all of the data; Microsoft SEAL never compresses nested
+        // objects.
+        thread_local size_t bounded_expansion_depth = 0;
+
+        class BoundedExpansionScope
+        {
+        public:
+            explicit BoundedExpansionScope(bool active) noexcept : active_(active)
+            {
+                if (active_)
+                {
+                    bounded_expansion_depth++;
+                }
+            }
+
+            ~BoundedExpansionScope()
+            {
+                if (active_)
+                {
+                    bounded_expansion_depth--;
+                }
+            }
+
+            BoundedExpansionScope(const BoundedExpansionScope &copy) = delete;
+
+            BoundedExpansionScope &operator=(const BoundedExpansionScope &assign) = delete;
+
+        private:
+            bool active_;
+        };
     } // namespace
 
     size_t Serialization::ComprSizeEstimate(size_t in_size, compr_mode_type compr_mode)
@@ -99,6 +159,9 @@ namespace seal
         case compr_mode_type::zlib:
             return ztools::zlib_deflate_size_bound(in_size);
 #endif
+        case compr_mode_type::bitpack:
+            return bitpack::bitpack_size_bound(in_size);
+
         case compr_mode_type::none:
             // No compression
             return in_size;
@@ -159,8 +222,9 @@ namespace seal
                 new_header.compr_mode = header_3_4.compr_mode;
                 new_header.size = header_3_4.size;
 
-                // Now validate the new header and discard if still not valid; something else is probably wrong
-                if (IsValidHeader(new_header))
+                // Now validate the new header and discard if still not valid; something else is probably wrong. A
+                // Microsoft SEAL 3.4 header starts with the magic number followed by a zero byte.
+                if (header_3_4.magic == seal_magic && header_3_4.zero_byte == 0x00 && IsValidHeader(new_header))
                 {
                     header = new_header;
                 }
@@ -223,7 +287,7 @@ namespace seal
 
     streamoff Serialization::Save(
         function<void(ostream &)> save_members, streamoff raw_size, ostream &stream, compr_mode_type compr_mode,
-        SEAL_MAYBE_UNUSED bool clear_buffers)
+        SEAL_MAYBE_UNUSED bool clear_buffers, uint8_t version_minor)
     {
         if (!save_members)
         {
@@ -236,6 +300,10 @@ namespace seal
         if (!IsSupportedComprMode(compr_mode))
         {
             throw invalid_argument("unsupported compression mode");
+        }
+        if (version_minor > SEAL_VERSION_MINOR)
+        {
+            throw invalid_argument("version_minor is invalid");
         }
 
         streamoff out_size = 0;
@@ -251,6 +319,11 @@ namespace seal
 
             // Create the header
             SEALHeader header;
+            header.version_minor = version_minor;
+            if (compr_mode == compr_mode_type::bitpack)
+            {
+                header.version_minor = max(header.version_minor, format_version_minor_bitpack);
+            }
 
             switch (compr_mode)
             {
@@ -315,6 +388,29 @@ namespace seal
                 break;
             }
 #endif
+            case compr_mode_type::bitpack:
+            {
+                // First save_members to a temporary byte stream; set the size of the temporary stream to be right from
+                // the start to avoid extra reallocs.
+                SafeByteBuffer safe_buffer(
+                    bitpack::bitpack_size_bound(raw_size - static_cast<streamoff>(sizeof(SEALHeader))), clear_buffers);
+                iostream temp_stream(&safe_buffer);
+                temp_stream.exceptions(ios_base::badbit | ios_base::failbit);
+                save_members(temp_stream);
+
+                auto safe_pool(MemoryManager::GetPool(mm_prof_opt::mm_force_new, clear_buffers));
+
+                // Create temporary aliasing DynArray to wrap safe_buffer
+                DynArray<seal_byte> safe_buffer_array(
+                    Pointer<seal_byte>::Aliasing(safe_buffer.data()), safe_buffer.size(),
+                    static_cast<size_t>(temp_stream.tellp()), false, safe_pool);
+
+                // After bit-packing, write_header_pack_buffer will write the final size to the given header and
+                // write the header to stream, before writing the bit-packed output.
+                bitpack::bitpack_write_header_pack_buffer(
+                    safe_buffer_array, reinterpret_cast<void *>(&header), stream, safe_pool);
+                break;
+            }
             default:
                 throw invalid_argument("unsupported compression mode");
             }
@@ -339,7 +435,14 @@ namespace seal
     }
 
     streamoff Serialization::Load(
-        function<void(istream &, SEALVersion)> load_members, istream &stream, SEAL_MAYBE_UNUSED bool clear_buffers)
+        function<void(istream &, SEALVersion)> load_members, istream &stream, bool clear_buffers)
+    {
+        return Load(std::move(load_members), stream, clear_buffers, false);
+    }
+
+    streamoff Serialization::Load(
+        function<void(istream &, SEALVersion)> load_members, istream &stream, SEAL_MAYBE_UNUSED bool clear_buffers,
+        bool bounded_expansion)
     {
         if (!load_members)
         {
@@ -374,6 +477,11 @@ namespace seal
                 // smaller than the header. Rejecting here also prevents header.size - sizeof(SEALHeader)
                 // below from underflowing into a huge compressed-payload bound.
                 throw logic_error("loaded SEALHeader is invalid");
+            }
+            if (bounded_expansion_depth && header.compr_mode != compr_mode_type::none)
+            {
+                // Objects nested in data loaded with bounded expansion must not be compressed
+                throw logic_error("unexpected compressed data");
             }
 
             // Stays false unless the stream is seekable and header.size is confirmed to fit the available
@@ -419,6 +527,9 @@ namespace seal
             // correct variant of load_members.
             SEALVersion version{ header.version_major, header.version_minor, 0, 0 };
 
+            // Objects nested in data loaded with bounded expansion must not be compressed
+            BoundedExpansionScope bounded_expansion_scope(bounded_expansion);
+
             switch (header.compr_mode)
             {
             case compr_mode_type::none:
@@ -447,6 +558,10 @@ namespace seal
                 {
                     auto inflate_buffer =
                         ztools::make_zlib_inflate_buffer(stream, safe_cast<streamoff>(compr_size), safe_pool);
+                    if (bounded_expansion)
+                    {
+                        inflate_buffer->set_expansion_limit(bounded_expansion_free_bytes, bounded_expansion_ratio);
+                    }
                     istream temp_stream(inflate_buffer.get());
                     temp_stream.exceptions(ios_base::badbit | ios_base::failbit);
 
@@ -455,6 +570,13 @@ namespace seal
                     if (inflate_buffer->failed())
                     {
                         throw logic_error("stream decompression failed");
+                    }
+
+                    // Reads are capped at the compressed size, so a failed stream means the input ended early, even
+                    // if the parser did not need the missing bytes (e.g., a trailing checksum).
+                    if (stream.fail())
+                    {
+                        expressive_rethrow_on_ios_base_failure(stream);
                     }
                     compressed_remaining = inflate_buffer->remaining();
                 }
@@ -489,6 +611,10 @@ namespace seal
                 {
                     auto inflate_buffer =
                         ztools::make_zstd_inflate_buffer(stream, safe_cast<streamoff>(compr_size), safe_pool);
+                    if (bounded_expansion)
+                    {
+                        inflate_buffer->set_expansion_limit(bounded_expansion_free_bytes, bounded_expansion_ratio);
+                    }
                     istream temp_stream(inflate_buffer.get());
                     temp_stream.exceptions(ios_base::badbit | ios_base::failbit);
 
@@ -497,6 +623,13 @@ namespace seal
                     if (inflate_buffer->failed())
                     {
                         throw logic_error("stream decompression failed");
+                    }
+
+                    // Reads are capped at the compressed size, so a failed stream means the input ended early, even
+                    // if the parser did not need the missing bytes (e.g., a trailing checksum).
+                    if (stream.fail())
+                    {
+                        expressive_rethrow_on_ios_base_failure(stream);
                     }
                     compressed_remaining = inflate_buffer->remaining();
                 }
@@ -514,6 +647,49 @@ namespace seal
                 break;
             }
 #endif
+            case compr_mode_type::bitpack:
+            {
+                // header.size counts the whole object including the header, so the packed payload is exactly
+                // header.size - sizeof(SEALHeader). Computing it directly keeps it correct on non-seekable streams,
+                // where tellg() returns -1 and cannot be used to measure the header.
+                auto packed_size = header.size - static_cast<uint64_t>(sizeof(SEALHeader));
+
+                auto safe_pool = MemoryManager::GetPool(mm_prof_opt::mm_force_new, clear_buffers);
+
+                // Unpack on demand directly into the parser rather than decoding the entire payload up front. This
+                // bounds memory use during loading to what the parser actually reads, so a hostile size claim in the
+                // packed data cannot drive an unbounded allocation.
+                streamoff packed_remaining = 0;
+                {
+                    auto unpack_buffer =
+                        bitpack::make_bitpack_unpack_buffer(stream, safe_cast<streamoff>(packed_size), safe_pool);
+                    if (bounded_expansion)
+                    {
+                        unpack_buffer->set_expansion_limit(bounded_expansion_free_bytes, bounded_expansion_ratio);
+                    }
+                    istream temp_stream(unpack_buffer.get());
+                    temp_stream.exceptions(ios_base::badbit | ios_base::failbit);
+
+                    load_members(temp_stream, version);
+
+                    if (unpack_buffer->failed())
+                    {
+                        throw logic_error("stream decompression failed");
+                    }
+                    packed_remaining = unpack_buffer->remaining();
+                }
+
+                // The parser may not have pulled the whole packed payload. On a seekable stream, where header.size
+                // was confirmed to fit the available input, skip any remainder so the stream ends exactly at
+                // stream_start_pos + header.size, keeping concatenated objects loadable. On a non-seekable stream
+                // header.size is unverified, so skipping is gated off: an inflated header.size must not drive
+                // stream.ignore() past the real data into an over-read or an indefinite block.
+                if (size_verified && packed_remaining > 0)
+                {
+                    stream.ignore(packed_remaining);
+                }
+                break;
+            }
             default:
                 throw invalid_argument("unsupported compression mode");
             }
@@ -537,7 +713,7 @@ namespace seal
 
     streamoff Serialization::Save(
         function<void(ostream &)> save_members, streamoff raw_size, seal_byte *out, size_t size,
-        compr_mode_type compr_mode, bool clear_buffers)
+        compr_mode_type compr_mode, bool clear_buffers, uint8_t version_minor)
     {
         if (!out)
         {
@@ -553,11 +729,18 @@ namespace seal
         }
         ArrayPutBuffer apbuf(reinterpret_cast<char *>(out), static_cast<streamsize>(size));
         ostream stream(&apbuf);
-        return Save(save_members, raw_size, stream, compr_mode, clear_buffers);
+        return Save(save_members, raw_size, stream, compr_mode, clear_buffers, version_minor);
     }
 
     streamoff Serialization::Load(
         function<void(istream &, SEALVersion)> load_members, const seal_byte *in, size_t size, bool clear_buffers)
+    {
+        return Load(std::move(load_members), in, size, clear_buffers, false);
+    }
+
+    streamoff Serialization::Load(
+        function<void(istream &, SEALVersion)> load_members, const seal_byte *in, size_t size, bool clear_buffers,
+        bool bounded_expansion)
     {
         if (!in)
         {
@@ -573,6 +756,6 @@ namespace seal
         }
         ArrayGetBuffer agbuf(reinterpret_cast<const char *>(in), static_cast<streamsize>(size));
         istream stream(&agbuf);
-        return Load(load_members, stream, clear_buffers);
+        return Load(std::move(load_members), stream, clear_buffers, bounded_expansion);
     }
 } // namespace seal

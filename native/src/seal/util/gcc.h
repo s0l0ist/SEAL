@@ -19,6 +19,12 @@
 
 #define SEAL_FORCE_INLINE inline __attribute__((always_inline))
 
+// GCC 15 miscompiles the complex multiply-adds in DWTHandler on x86-64 when it fuses them into FMA instructions,
+// for example with -march=x86-64-v3 or -march=native, so these functions are compiled without contraction
+#if (__GNUC__ >= 15) && defined(__x86_64__)
+#define SEAL_NO_FP_CONTRACT __attribute__((optimize("fp-contract=off")))
+#endif
+
 #ifdef SEAL_USE_ALIGNED_ALLOC
 #ifdef _WIN32
 // The Windows C runtime provides no std::aligned_alloc; _aligned_malloc results must be
@@ -86,14 +92,12 @@ __extension__ typedef unsigned __int128 uint128_t;
 // #endif
 
 #ifdef SEAL_USE__SUBBORROW_U64
+// Before GCC 7.2, _subborrow_u64 swapped its operands (https://gcc.gnu.org/bugzilla/show_bug.cgi?id=81294), and
+// optimizations could lose the borrow between calls (https://gcc.gnu.org/bugzilla/show_bug.cgi?id=81300), so the
+// generic implementation is used instead.
 #if ((__GNUC__ == 7) && (__GNUC_MINOR__ >= 2)) || (__GNUC__ >= 8)
-// The inverted arguments problem was fixed in GCC-7.2
-// (https://patchwork.ozlabs.org/patch/784309/)
 #define SEAL_SUB_BORROW_UINT64(operand1, operand2, borrow, result) _subborrow_u64(borrow, operand1, operand2, result)
-#else
-// Warning: Note the inverted order of operand1 and operand2
-#define SEAL_SUB_BORROW_UINT64(operand1, operand2, borrow, result) _subborrow_u64(borrow, operand2, operand1, result)
-#endif //(__GNUC__ == 7) && (__GNUC_MINOR__ >= 2)
+#endif
 #endif
 
 #endif // SEAL_USE_INTRIN

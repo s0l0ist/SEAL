@@ -129,6 +129,7 @@ namespace sealbench
         // 3. BGV
         // 4. CKKS
         // 5. Util
+        // 6. Serialize
         int n = static_cast<int>(parms.first);
         int log_q = static_cast<int>(
             bm_env_map.find(parms_ckks)->second->context().key_context_data()->total_coeff_modulus_bit_count());
@@ -224,6 +225,69 @@ namespace sealbench
         SEAL_BENCHMARK_REGISTER(UTIL, n, 0, NTTInverseLowLevel, bm_util_ntt_inverse_low_level, bm_env_bfv);
         SEAL_BENCHMARK_REGISTER(UTIL, n, 0, NTTForwardLowLevelLazy, bm_util_ntt_forward_low_level_lazy, bm_env_bfv);
         SEAL_BENCHMARK_REGISTER(UTIL, n, 0, NTTInverseLowLevelLazy, bm_util_ntt_inverse_low_level_lazy, bm_env_bfv);
+
+        // Serialization cases save and load a BFV ciphertext, a seeded BFV ciphertext, a public key, and
+        // relinearization keys under each supported compression mode, reporting the serialized size in bytes as the
+        // counter "size". ZLIB is used for relinearization keys only for n <= 8192, because larger keys take seconds
+        // per iteration.
+#define SEAL_BENCHMARK_REGISTER_SERIALIZATION(name, func, env, mode) \
+    SEAL_BENCHMARK_REGISTER(Serialization, n, log_q, name, func, env, seal::compr_mode_type::mode)
+
+        SEAL_BENCHMARK_REGISTER_SERIALIZATION(SaveCiphertextBFVNone, bm_serialize_save_ct, bm_env_bfv, none);
+        SEAL_BENCHMARK_REGISTER_SERIALIZATION(LoadCiphertextBFVNone, bm_serialize_load_ct, bm_env_bfv, none);
+        SEAL_BENCHMARK_REGISTER_SERIALIZATION(SavePublicKeyNone, bm_serialize_save_pk, bm_env_bfv, none);
+        SEAL_BENCHMARK_REGISTER_SERIALIZATION(LoadPublicKeyNone, bm_serialize_load_pk, bm_env_bfv, none);
+        SEAL_BENCHMARK_REGISTER_SERIALIZATION(
+            SaveSeededCiphertextBFVNone, bm_serialize_save_seeded_ct, bm_env_bfv, none);
+        SEAL_BENCHMARK_REGISTER_SERIALIZATION(
+            LoadSeededCiphertextBFVNone, bm_serialize_load_seeded_ct, bm_env_bfv, none);
+#ifdef SEAL_USE_ZLIB
+        SEAL_BENCHMARK_REGISTER_SERIALIZATION(SaveCiphertextBFVZlib, bm_serialize_save_ct, bm_env_bfv, zlib);
+        SEAL_BENCHMARK_REGISTER_SERIALIZATION(LoadCiphertextBFVZlib, bm_serialize_load_ct, bm_env_bfv, zlib);
+        SEAL_BENCHMARK_REGISTER_SERIALIZATION(SavePublicKeyZlib, bm_serialize_save_pk, bm_env_bfv, zlib);
+        SEAL_BENCHMARK_REGISTER_SERIALIZATION(LoadPublicKeyZlib, bm_serialize_load_pk, bm_env_bfv, zlib);
+        SEAL_BENCHMARK_REGISTER_SERIALIZATION(
+            SaveSeededCiphertextBFVZlib, bm_serialize_save_seeded_ct, bm_env_bfv, zlib);
+        SEAL_BENCHMARK_REGISTER_SERIALIZATION(
+            LoadSeededCiphertextBFVZlib, bm_serialize_load_seeded_ct, bm_env_bfv, zlib);
+#endif
+#ifdef SEAL_USE_ZSTD
+        SEAL_BENCHMARK_REGISTER_SERIALIZATION(SaveCiphertextBFVZstd, bm_serialize_save_ct, bm_env_bfv, zstd);
+        SEAL_BENCHMARK_REGISTER_SERIALIZATION(LoadCiphertextBFVZstd, bm_serialize_load_ct, bm_env_bfv, zstd);
+        SEAL_BENCHMARK_REGISTER_SERIALIZATION(SavePublicKeyZstd, bm_serialize_save_pk, bm_env_bfv, zstd);
+        SEAL_BENCHMARK_REGISTER_SERIALIZATION(LoadPublicKeyZstd, bm_serialize_load_pk, bm_env_bfv, zstd);
+        SEAL_BENCHMARK_REGISTER_SERIALIZATION(
+            SaveSeededCiphertextBFVZstd, bm_serialize_save_seeded_ct, bm_env_bfv, zstd);
+        SEAL_BENCHMARK_REGISTER_SERIALIZATION(
+            LoadSeededCiphertextBFVZstd, bm_serialize_load_seeded_ct, bm_env_bfv, zstd);
+#endif
+        SEAL_BENCHMARK_REGISTER_SERIALIZATION(SaveCiphertextBFVBitPack, bm_serialize_save_ct, bm_env_bfv, bitpack);
+        SEAL_BENCHMARK_REGISTER_SERIALIZATION(LoadCiphertextBFVBitPack, bm_serialize_load_ct, bm_env_bfv, bitpack);
+        SEAL_BENCHMARK_REGISTER_SERIALIZATION(SavePublicKeyBitPack, bm_serialize_save_pk, bm_env_bfv, bitpack);
+        SEAL_BENCHMARK_REGISTER_SERIALIZATION(LoadPublicKeyBitPack, bm_serialize_load_pk, bm_env_bfv, bitpack);
+        SEAL_BENCHMARK_REGISTER_SERIALIZATION(
+            SaveSeededCiphertextBFVBitPack, bm_serialize_save_seeded_ct, bm_env_bfv, bitpack);
+        SEAL_BENCHMARK_REGISTER_SERIALIZATION(
+            LoadSeededCiphertextBFVBitPack, bm_serialize_load_seeded_ct, bm_env_bfv, bitpack);
+        if (bm_env_bfv->context().using_keyswitching())
+        {
+            SEAL_BENCHMARK_REGISTER_SERIALIZATION(SaveRelinKeysNone, bm_serialize_save_rlk, bm_env_bfv, none);
+            SEAL_BENCHMARK_REGISTER_SERIALIZATION(LoadRelinKeysNone, bm_serialize_load_rlk, bm_env_bfv, none);
+#ifdef SEAL_USE_ZLIB
+            if (n <= 8192)
+            {
+                SEAL_BENCHMARK_REGISTER_SERIALIZATION(SaveRelinKeysZlib, bm_serialize_save_rlk, bm_env_bfv, zlib);
+                SEAL_BENCHMARK_REGISTER_SERIALIZATION(LoadRelinKeysZlib, bm_serialize_load_rlk, bm_env_bfv, zlib);
+            }
+#endif
+#ifdef SEAL_USE_ZSTD
+            SEAL_BENCHMARK_REGISTER_SERIALIZATION(SaveRelinKeysZstd, bm_serialize_save_rlk, bm_env_bfv, zstd);
+            SEAL_BENCHMARK_REGISTER_SERIALIZATION(LoadRelinKeysZstd, bm_serialize_load_rlk, bm_env_bfv, zstd);
+#endif
+            SEAL_BENCHMARK_REGISTER_SERIALIZATION(SaveRelinKeysBitPack, bm_serialize_save_rlk, bm_env_bfv, bitpack);
+            SEAL_BENCHMARK_REGISTER_SERIALIZATION(LoadRelinKeysBitPack, bm_serialize_load_rlk, bm_env_bfv, bitpack);
+        }
+#undef SEAL_BENCHMARK_REGISTER_SERIALIZATION
     }
 
 } // namespace sealbench

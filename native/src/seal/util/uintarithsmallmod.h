@@ -15,6 +15,129 @@ namespace seal
 {
     namespace util
     {
+        static_assert(SEAL_MOD_BIT_COUNT_MAX <= 61, "lazy reductions require moduli of at most 61 bits");
+
+        /*
+        Branch-free primitives, for conditions that are unpredictable or depend on secret data. With GCC and Clang on
+        x86-64 and AArch64 they are written in inline assembly, since compilers may turn a conditional selection, even
+        one written with a mask, into a branch. Elsewhere they use integer arithmetic.
+        */
+
+        /**
+        Returns 2^64 - 1 if x < y, and 0 otherwise, without a branch.
+        */
+        SEAL_NODISCARD SEAL_FORCE_INLINE std::uint64_t less_than_mask_uint64(std::uint64_t x, std::uint64_t y) noexcept
+        {
+#if defined(SEAL_BRANCH_FREE_ASM_X86_64)
+            std::uint64_t mask;
+            __asm__("cmpq %[y], %[x]\n\tsbbq %[r], %[r]" : [r] "=r"(mask) : [x] "r"(x), [y] "r"(y) : "cc");
+            return mask;
+#elif defined(SEAL_BRANCH_FREE_ASM_AARCH64)
+            std::uint64_t mask;
+            __asm__("cmp %[x], %[y]\n\tcsetm %[r], lo" : [r] "=r"(mask) : [x] "r"(x), [y] "r"(y) : "cc");
+            return mask;
+#elif defined(_MSC_VER) && defined(SEAL_USE__SUBBORROW_U64)
+            unsigned long long diff;
+            return std::uint64_t(0) - static_cast<std::uint64_t>(_subborrow_u64(0, x, y, &diff));
+#else
+            // Borrow of x - y from the most significant bits, without a comparison
+            return std::uint64_t(0) - (((~x & y) | (~(x ^ y) & (x - y))) >> 63);
+#endif
+        }
+
+        /**
+        Returns x - y + m if x < y, and x - y otherwise (modulo 2^64), without a branch.
+        */
+        SEAL_NODISCARD SEAL_FORCE_INLINE std::uint64_t sub_add_if_lt_uint64(
+            std::uint64_t x, std::uint64_t y, std::uint64_t m) noexcept
+        {
+#if defined(SEAL_BRANCH_FREE_ASM_X86_64)
+            std::uint64_t d = x;
+            std::uint64_t mask;
+            __asm__("subq %[y], %[d]\n\tsbbq %[r], %[r]" : [d] "+r"(d), [r] "=&r"(mask) : [y] "r"(y) : "cc");
+            return d + (m & mask);
+#elif defined(SEAL_BRANCH_FREE_ASM_AARCH64)
+            std::uint64_t d;
+            std::uint64_t t;
+            __asm__("subs %[d], %[x], %[y]\n\tcsel %[t], %[m], xzr, lo"
+                    : [d] "=&r"(d), [t] "=r"(t)
+                    : [x] "r"(x), [y] "r"(y), [m] "r"(m)
+                    : "cc");
+            return d + t;
+#else
+            return x - y + (m & less_than_mask_uint64(x, y));
+#endif
+        }
+
+        /**
+        Returns x - m if x >= m, and x otherwise, without a branch.
+        */
+        SEAL_NODISCARD SEAL_FORCE_INLINE std::uint64_t sub_if_ge_uint64(std::uint64_t x, std::uint64_t m) noexcept
+        {
+#if defined(SEAL_BRANCH_FREE_ASM_X86_64)
+            std::uint64_t t = x;
+            __asm__("subq %[m], %[t]\n\tcmovbq %[x], %[t]" : [t] "+&r"(t) : [m] "r"(m), [x] "r"(x) : "cc");
+            return t;
+#elif defined(SEAL_BRANCH_FREE_ASM_AARCH64)
+            std::uint64_t t;
+            __asm__("subs %[t], %[x], %[m]\n\tcsel %[t], %[x], %[t], lo"
+                    : [t] "=&r"(t)
+                    : [x] "r"(x), [m] "r"(m)
+                    : "cc");
+            return t;
+#else
+            return x - (m & ~less_than_mask_uint64(x, m));
+#endif
+        }
+
+        /**
+        Returns if_true if cond is true, and if_false otherwise, without a branch.
+        */
+        SEAL_NODISCARD SEAL_FORCE_INLINE std::uint64_t select_uint64(
+            bool cond, std::uint64_t if_true, std::uint64_t if_false) noexcept
+        {
+            // The assembly tests only the lowest bit of the condition, since the other bits of a bool in a register
+            // may be arbitrary
+#if defined(SEAL_BRANCH_FREE_ASM_X86_64)
+            std::uint64_t r = if_false;
+            __asm__("testl $1, %[c]\n\tcmovneq %[t], %[r]"
+                    : [r] "+r"(r)
+                    : [c] "r"(static_cast<std::uint32_t>(cond)), [t] "r"(if_true)
+                    : "cc");
+            return r;
+#elif defined(SEAL_BRANCH_FREE_ASM_AARCH64)
+            std::uint64_t r;
+            __asm__("tst %w[c], #1\n\tcsel %[r], %[t], %[f], ne"
+                    : [r] "=r"(r)
+                    : [c] "r"(static_cast<std::uint32_t>(cond)), [t] "r"(if_true), [f] "r"(if_false)
+                    : "cc");
+            return r;
+#else
+            const std::uint64_t mask = std::uint64_t(0) - static_cast<std::uint64_t>(cond);
+            return if_false ^ ((if_true ^ if_false) & mask);
+#endif
+        }
+
+        /**
+        Writes x + y to result if x >= threshold, and x otherwise, without a branch. Here y and result have
+        uint64_count words, which must be at least one, and the carry out of the last word is discarded.
+        */
+        SEAL_FORCE_INLINE void add_if_ge_uint(
+            std::uint64_t x, std::uint64_t threshold, const std::uint64_t *y, std::size_t uint64_count,
+            std::uint64_t *result) noexcept
+        {
+            const std::uint64_t mask = ~less_than_mask_uint64(x, threshold);
+            std::uint64_t sum = x + (y[0] & mask);
+            std::uint64_t carry = less_than_mask_uint64(sum, x) & 1;
+            result[0] = sum;
+            for (std::size_t i = 1; i < uint64_count; i++)
+            {
+                sum = (y[i] & mask) + carry;
+                carry = less_than_mask_uint64(sum, carry) & 1;
+                result[i] = sum;
+            }
+        }
+
         /**
         Returns (operand++) mod modulus.
         Correctness: operand must be at most (2 * modulus -2) for correctness.
@@ -125,8 +248,7 @@ namespace seal
             }
 #endif
             // Sum of operands modulo Modulus can never wrap around 2^64
-            operand1 += operand2;
-            return SEAL_COND_SELECT(operand1 >= modulus.value(), operand1 - modulus.value(), operand1);
+            return sub_if_ge_uint64(operand1 + operand2, modulus.value());
         }
 
         /**
@@ -153,14 +275,111 @@ namespace seal
                 throw std::out_of_range("operand2");
             }
 #endif
-            unsigned long long temp;
-            std::int64_t borrow = static_cast<std::int64_t>(SEAL_SUB_BORROW_UINT64(operand1, operand2, 0, &temp));
-            return static_cast<std::uint64_t>(temp) + (modulus.value() & static_cast<std::uint64_t>(-borrow));
+            return sub_add_if_lt_uint64(operand1, operand2, modulus.value());
         }
 
         /**
+        Returns (hi * 2^64 + lo) mod p.
+        Correctness: p must be less than 2^62.
+
+        @param[in] r64 2^64 mod p (see two_pow_64_mod)
+        @param[in] ratio_lo modulus.const_ratio()[0], which equals floor(r64 * 2^64 / p)
+        @param[in] ratio_hi modulus.const_ratio()[1], which equals floor(2^64 / p)
+        */
+        SEAL_NODISCARD SEAL_FORCE_INLINE std::uint64_t barrett_reduce_128_precomputed(
+            std::uint64_t lo, std::uint64_t hi, std::uint64_t p, std::uint64_t r64, std::uint64_t ratio_lo,
+            std::uint64_t ratio_hi)
+        {
+            unsigned long long q_hi, q_lo;
+            multiply_uint64_hw64(hi, ratio_lo, &q_hi);
+            multiply_uint64_hw64(lo, ratio_hi, &q_lo);
+
+            // hi * r64 and lo, each reduced to [0, 2p)
+            std::uint64_t r = (hi * r64 - q_hi * p) + (lo - q_lo * p);
+            const std::uint64_t two_p = p << 1;
+            return sub_if_ge_uint64(sub_if_ge_uint64(r, two_p), p);
+        }
+
+        /**
+        Returns 2^64 mod modulus.
+        */
+        SEAL_NODISCARD inline std::uint64_t two_pow_64_mod(const Modulus &modulus)
+        {
+            // const_ratio()[1] = floor(2^64 / p)
+            return static_cast<std::uint64_t>(0) - modulus.const_ratio()[1] * modulus.value();
+        }
+
+        /**
+        Returns -p^(-1) mod 2^64 for odd p.
+        */
+        SEAL_NODISCARD inline std::uint64_t neg_inv_mod_2_64(std::uint64_t p)
+        {
+#ifdef SEAL_DEBUG
+            if (!(p & 1))
+            {
+                throw std::invalid_argument("p");
+            }
+#endif
+            // Newton iteration; p is its own inverse modulo 8, and each step doubles the number of correct bits
+            std::uint64_t inv = p;
+            for (int i = 0; i < 5; i++)
+            {
+                inv *= std::uint64_t(2) - p * inv;
+            }
+            return std::uint64_t(0) - inv;
+        }
+
+        /**
+        Returns (hi * 2^64 + lo) * 2^(-64) mod p, fully reduced (Montgomery reduction).
+        Correctness: p must be odd and less than 2^63, neg_inv_p must be -p^(-1) mod 2^64 (see neg_inv_mod_2_64), and
+        hi * 2^64 + lo must be less than p * 2^64.
+        */
+        SEAL_NODISCARD SEAL_FORCE_INLINE std::uint64_t montgomery_reduce_128(
+            std::uint64_t lo, std::uint64_t hi, std::uint64_t p, std::uint64_t neg_inv_p) noexcept
+        {
+            // r = (hi * 2^64 + lo + m * p) / 2^64 < 2p; the low words sum to 2^64 if lo != 0, and to 0 otherwise
+            std::uint64_t m = lo * neg_inv_p;
+            unsigned long long u;
+            multiply_uint64_hw64(m, p, &u);
+            std::uint64_t r = hi + static_cast<std::uint64_t>(u) + static_cast<std::uint64_t>(lo != 0);
+            return sub_if_ge_uint64(r, p);
+        }
+
+        /**
+        Montgomery reduction of dyadic products modulo an odd p of at most 61 bits. A product of two outputs of
+        reduce_input, or a sum of two such products, is a valid input to reduce. Callers fold the factor 2^64 into a
+        later constant multiplication.
+        */
+        class DyadicMontgomeryReducer
+        {
+        public:
+            explicit DyadicMontgomeryReducer(const Modulus &modulus)
+                : p_(modulus.value()), two_p_(modulus.value() << 1), neg_inv_p_(neg_inv_mod_2_64(modulus.value()))
+            {}
+
+            // Reduces x in [0, 4p) to [0, 2p)
+            SEAL_NODISCARD SEAL_FORCE_INLINE std::uint64_t reduce_input(std::uint64_t x) const noexcept
+            {
+                return sub_if_ge_uint64(x, two_p_);
+            }
+
+            // Returns (hi * 2^64 + lo) * 2^(-64) mod p (see montgomery_reduce_128)
+            SEAL_NODISCARD SEAL_FORCE_INLINE std::uint64_t reduce(std::uint64_t lo, std::uint64_t hi) const noexcept
+            {
+                return montgomery_reduce_128(lo, hi, p_, neg_inv_p_);
+            }
+
+        private:
+            std::uint64_t p_;
+
+            std::uint64_t two_p_;
+
+            std::uint64_t neg_inv_p_;
+        };
+
+        /**
         Returns input mod modulus. This is not standard Barrett reduction.
-        Correctness: modulus must be at most 63-bit.
+        Correctness: modulus must be less than 2^62.
         @param[in] input Should be at most 128-bit.
         */
         template <typename T, typename = std::enable_if_t<is_uint64_v<T>>>
@@ -176,31 +395,10 @@ namespace seal
                 throw std::invalid_argument("modulus");
             }
 #endif
-            // Reduces input using base 2^64 Barrett reduction
-            // input allocation size must be 128 bits
-
-            unsigned long long tmp1, tmp2[2], tmp3, carry;
-            const std::uint64_t *const_ratio = modulus.const_ratio().data();
-
-            // Multiply input and const_ratio
-            // Round 1
-            multiply_uint64_hw64(input[0], const_ratio[0], &carry);
-
-            multiply_uint64(input[0], const_ratio[1], tmp2);
-            tmp3 = tmp2[1] + add_uint64(tmp2[0], carry, &tmp1);
-
-            // Round 2
-            multiply_uint64(input[1], const_ratio[0], tmp2);
-            carry = tmp2[1] + add_uint64(tmp1, tmp2[0], &tmp1);
-
-            // This is all we care about
-            tmp1 = input[1] * const_ratio[1] + tmp3 + carry;
-
-            // Barrett subtraction
-            tmp3 = input[0] - tmp1 * modulus.value();
-
-            // One more subtraction is enough
-            return SEAL_COND_SELECT(tmp3 >= modulus.value(), tmp3 - modulus.value(), tmp3);
+            // See barrett_reduce_128_precomputed
+            return barrett_reduce_128_precomputed(
+                static_cast<std::uint64_t>(input[0]), static_cast<std::uint64_t>(input[1]), modulus.value(),
+                two_pow_64_mod(modulus), modulus.const_ratio()[0], modulus.const_ratio()[1]);
         }
 
         /**
@@ -226,7 +424,7 @@ namespace seal
             tmp[0] = input - tmp[1] * modulus.value();
 
             // One more subtraction is enough
-            return SEAL_COND_SELECT(tmp[0] >= modulus.value(), tmp[0] - modulus.value(), tmp[0]);
+            return sub_if_ge_uint64(tmp[0], modulus.value());
         }
 
         /**
@@ -302,7 +500,7 @@ namespace seal
             const std::uint64_t p = modulus.value();
             multiply_uint64_hw64(x, y.quotient, &tmp1);
             tmp2 = y.operand * x - tmp1 * p;
-            return SEAL_COND_SELECT(tmp2 >= p, tmp2 - p, tmp2);
+            return sub_if_ge_uint64(tmp2, p);
         }
 
         /**

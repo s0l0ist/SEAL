@@ -54,21 +54,11 @@ static_assert(sizeof(unsigned long long) == 8, "Require sizeof(unsigned long lon
 
 // Upper bound on the size of a ciphertext (cannot exceed 2^32 / poly_modulus_degree)
 #define SEAL_CIPHERTEXT_SIZE_MAX 16
-#if SEAL_CIPHERTEXT_SIZE_MAX > 0x100000000ULL / SEAL_POLY_MOD_DEGREE_MAX
-#error "SEAL_CIPHERTEXT_SIZE_MAX is too large"
-#endif
 #define SEAL_CIPHERTEXT_SIZE_MIN 2
 
 // How many pairs of modular integers can we multiply and accumulate in a 128-bit data type
-#if SEAL_MOD_BIT_COUNT_MAX > 32
 #define SEAL_MULTIPLY_ACCUMULATE_MOD_MAX (1 << (128 - (SEAL_MOD_BIT_COUNT_MAX << 1)))
-#define SEAL_MULTIPLY_ACCUMULATE_INTERNAL_MOD_MAX (1 << (128 - (SEAL_INTERNAL_MOD_BIT_COUNT_MAX << 1)))
 #define SEAL_MULTIPLY_ACCUMULATE_USER_MOD_MAX (1 << (128 - (SEAL_USER_MOD_BIT_COUNT_MAX << 1)))
-#else
-#define SEAL_MULTIPLY_ACCUMULATE_MOD_MAX SIZE_MAX
-#define SEAL_MULTIPLY_ACCUMULATE_INTERNAL_MOD_MAX SIZE_MAX
-#define SEAL_MULTIPLY_ACCUMULATE_USER_MOD_MAX SIZE_MAX
-#endif
 
 // Detect system
 #define SEAL_SYSTEM_OTHER 1
@@ -97,6 +87,13 @@ static_assert(sizeof(unsigned long long) == 8, "Require sizeof(unsigned long lon
 #define SEAL_COMPILER SEAL_COMPILER_GCC
 #else
 #error "Unsupported compiler"
+#endif
+
+// Require a little-endian platform. Microsoft SEAL saves data in the platform's byte order, so data saved on a
+// big-endian platform could not be loaded on a little-endian one, or vice versa. All MSVC targets are little-endian.
+#if (SEAL_COMPILER != SEAL_COMPILER_MSVC) && \
+    (!defined(__BYTE_ORDER__) || !defined(__ORDER_LITTLE_ENDIAN__) || (__BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__))
+#error "Microsoft SEAL requires a little-endian platform"
 #endif
 
 // MSVC support
@@ -136,6 +133,11 @@ namespace seal
 #define SEAL_FORCE_INLINE inline
 #endif
 
+// Compile a function without floating-point contraction
+#ifndef SEAL_NO_FP_CONTRACT
+#define SEAL_NO_FP_CONTRACT
+#endif
+
 // Use `if constexpr' from C++17
 #ifdef SEAL_USE_IF_CONSTEXPR
 #define SEAL_IF_CONSTEXPR if constexpr
@@ -143,9 +145,11 @@ namespace seal
 #define SEAL_IF_CONSTEXPR if
 #endif
 
-// Use [[maybe_unused]] from C++17
+// Use [[maybe_unused]] from C++17, or the equivalent GCC/Clang attribute in C++14
 #ifdef SEAL_USE_MAYBE_UNUSED
 #define SEAL_MAYBE_UNUSED [[maybe_unused]]
+#elif defined(__GNUC__) || defined(__clang__)
+#define SEAL_MAYBE_UNUSED __attribute__((unused))
 #else
 #define SEAL_MAYBE_UNUSED
 #endif
@@ -155,6 +159,18 @@ namespace seal
 #define SEAL_NODISCARD [[nodiscard]]
 #else
 #define SEAL_NODISCARD
+#endif
+
+// Out-of-class definitions of static constexpr data members are required in C++14. Since C++17 these members are
+// implicitly inline, and GCC emits them as unique symbols on ELF platforms and as COMDAT symbols on MinGW, both of
+// which conflict with a strong definition in a library compiled as C++14. Making the C++14 definitions weak on ELF and
+// link-once (selectany) on MinGW allows linking with code compiled as C++17 or newer.
+#if defined(__ELF__) && (__cplusplus < 201703L)
+#define SEAL_CONSTEXPR_MEMBER_DEF __attribute__((weak))
+#elif defined(__MINGW32__) && (__cplusplus < 201703L)
+#define SEAL_CONSTEXPR_MEMBER_DEF __attribute__((selectany))
+#else
+#define SEAL_CONSTEXPR_MEMBER_DEF
 #endif
 
 // C++14 does not have std::for_each_n so we use a custom implementation
@@ -283,11 +299,9 @@ namespace seal
     auto SEAL_JOIN(_seal_temp_alloc_, __LINE__)(seal::util::allocate_zero_uint(poly_modulus_degree, pool)); \
     seal::util::CoeffIter name(SEAL_JOIN(_seal_temp_alloc_, __LINE__).get());
 
-// Conditionally select the former if true and the latter if false.
-// This is a temporary solution that generates constant-time code with all compilers on all platforms.
-#ifndef SEAL_AVOID_BRANCHING
-#define SEAL_COND_SELECT(cond, if_true, if_false) (cond ? if_true : if_false)
-#else
-#define SEAL_COND_SELECT(cond, if_true, if_false) \
-    ((if_false) ^ ((~static_cast<uint64_t>(cond) + 1) & ((if_true) ^ (if_false))))
+// Platforms on which the branch-free functions in uintarithsmallmod.h use inline assembly
+#if (defined(__GNUC__) || defined(__clang__)) && defined(__x86_64__)
+#define SEAL_BRANCH_FREE_ASM_X86_64
+#elif (defined(__GNUC__) || defined(__clang__)) && defined(__aarch64__)
+#define SEAL_BRANCH_FREE_ASM_AARCH64
 #endif

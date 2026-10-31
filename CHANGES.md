@@ -1,5 +1,94 @@
 # List of Changes
 
+## Version 4.7.2
+
+- Worked around a GCC 15 bug that made `CKKSEncoder::decode` return incorrect results on x86-64 when FMA instructions are enabled, for example with `-march=native` or `-march=x86-64-v3`.
+- Fixed an off-by-one error in the rejection sampling of `util::sample_poly_uniform`, which made its output very slightly non-uniform ([PR #764](https://github.com/microsoft/SEAL/pull/764)).
+- Fixed `util::sample_poly_normal` to round the noise to the nearest integer instead of truncating it, which reduced its standard deviation from 3.2 to about 2.83. This affected only builds with `SEAL_USE_GAUSSIAN_NOISE=ON` ([PR #765](https://github.com/microsoft/SEAL/pull/765)).
+- Loading no longer interprets arbitrary data as a Microsoft SEAL 3.4 header, and accepts Microsoft SEAL 3.x headers only from versions 3.4 through 3.7.
+- Fixed `Evaluator::mod_switch_to_inplace` for plaintexts to throw `std::invalid_argument` for an invalid plaintext, as documented, also when the plaintext is already at the target level.
+- Fixed `CKKSEncoder::encode` for a single `double` to accept the same scales as the other overloads. It also accepted subnormal scales and scales one bit larger than the others allow.
+- Fixed a data race when the allocation statistics of a thread-safe memory pool, such as `MemoryPoolHandle::alloc_byte_count`, are read while other threads allocate from it.
+
+## Version 4.7.1
+
+- Vectorized modular addition, subtraction, and negation of polynomials, which speeds up for example `Evaluator::add`, `Evaluator::sub`, and `Evaluator::negate`. This uses NEON on AArch64, except with MSVC, and on x86-64 AVX-512 or AVX2 when the compiler targets them, for example with `-march=native`, and SSE2 otherwise. It requires `SEAL_USE_INTRIN=ON`, the default. With Intel HEXL, addition and subtraction still use Intel HEXL. The results do not change.
+- Fixed `util::select_uint64` on x86-64 with Clang, which could return `if_true` when the condition was false but not computed by a comparison. The calls in the library were not affected.
+- Fixed `util::modulo_poly_coeffs`, `util::add_poly_coeffmod`, `util::sub_poly_coeffmod`, `util::add_poly_scalar_coeffmod`, `util::sub_poly_scalar_coeffmod`, and `util::multiply_poly_scalar_coeffmod` with Intel HEXL for polynomials with no coefficients, which Intel HEXL rejected in Debug builds.
+- Microsoft SEAL no longer uses the intrinsic `_subborrow_u64` with GCC before 7.2, which can lose the borrow between calls with optimizations enabled.
+- Noted in README.md that Intel HEXL improves performance only on processors with AVX-512, and makes most operations slower on others.
+
+## Version 4.7.0
+
+### Breaking Changes
+
+- The install directories and library names no longer contain the version number: headers go to `include/seal`, the CMake package to `lib/cmake/SEAL`, and the static libraries are `libseal.a` and `libsealc.a` (`seal.lib` and `sealc.lib` with MSVC). Different versions can no longer be installed side by side. With `SEAL_BUILD_DEPS=ON`, the Microsoft GSL headers go to `include/seal/thirdparty`.
+- Removed the CMake option `SEAL_AVOID_BRANCHING`. Conditional selections in critical functions are now always written without branches, in inline assembly with GCC and Clang on x86-64 and AArch64.
+- Removed the macro `SEAL_COND_SELECT`, which `util::select_uint64` replaces.
+
+### Performance Improvements
+
+- Improved performance throughout the library, for example in BFV multiplication, key switching (relinearization and rotations), modulus switching, rescaling, encryption, decryption, `Evaluator::multiply_plain`, and the NTT.
+- These improvements do not change any results: given the same randomness, keys, ciphertexts, and decryptions are identical to those of Microsoft SEAL 4.6.2, except where the bugs listed below are fixed. Noise growth and the choice of encryption parameters are unchanged.
+
+### New Features
+
+- Added `Evaluator::rotate_rows` and `Evaluator::rotate_vector` overloads that rotate a ciphertext by several steps at once. Steps that have their own Galois keys share work, which is faster than separate rotations, and the results are the same. Added `Evaluator_RotateRowsMany` and `Evaluator_RotateVectorMany` to the C API, and `Evaluator.RotateRows` and `Evaluator.RotateVector` overloads to the .NET wrapper.
+- Added functions to `seal::util`, such as out-of-place NTTs.
+
+### Bug Fixes
+
+- Fixed key switching (relinearization, rotations, and `Evaluator::apply_galois`), which could give incorrect results with more than 65 coefficient modulus primes.
+- Fixed `Evaluator::relinearize` for ciphertexts of size greater than 3, which need relinearization keys that `KeyGenerator` does not create.
+- Fixed `Evaluator::multiply` and `Evaluator::square` to throw `std::invalid_argument` for a ciphertext of size 0. Multiplying one by a ciphertext of size 3 or more could dereference a null pointer, and squaring one threw `std::logic_error`.
+- Fixed `Evaluator::multiply`, `Evaluator::square`, `Evaluator::relinearize`, `Evaluator::add_plain`, `Evaluator::sub_plain`, `Evaluator::apply_galois`, and the functions for modulus switching, rotation, and conjugation to throw `std::invalid_argument` for an uninitialized memory pool, as documented, instead of `std::logic_error` or no exception.
+- Fixed `util::modulo_poly_coeffs` with Intel HEXL, which could return incorrect results for moduli of less than 14 bits and corrupt memory for the moduli 2 and 4. This could affect BGV with plaintext moduli of less than 14 bits.
+- Fixed the CMake configuration with CMake 4 when Microsoft SEAL downloads and builds Intel HEXL.
+- Fixed the CMake configuration on Unix-like systems when the shared SEAL_C library is built with Intel HEXL.
+- Fixed the CMake configuration building dependencies outside the build directory when their sources are given with `FETCHCONTENT_SOURCE_DIR_<name>`.
+- Fixed the pkg-config files pointing to `lib` when the libraries are installed to another directory, such as `lib64`.
+- Fixed unused parameter warnings in C++14 builds with GCC and Clang.
+- Fixed building as C++17 with the debug mode of libstdc++ (`_GLIBCXX_DEBUG`): comparisons of `util::ReverseIter` did not compile.
+
+### Other Changes
+
+- Lifting plaintext coefficients to the coefficient modulus no longer branches when the plain modulus is larger than one of the coefficient modulus primes, which it did even with `SEAL_AVOID_BRANCHING`.
+- Public-key encryption now also erases its intermediate encryption of zero from memory.
+
+## Version 4.6.2
+
+- Fixed the CMake configuration failing with "Microsoft GSL: not found" when Microsoft SEAL is built with an installed Microsoft GSL 5 (`SEAL_BUILD_DEPS=OFF`). The CMake package of Microsoft GSL accepts requests only for its own major version, so Microsoft SEAL now requests no version and requires Microsoft GSL 4.0 or newer ([PR #763](https://github.com/microsoft/SEAL/pull/763)).
+- Updated dependency versions: Microsoft GSL to 5.0.1, GoogleTest to 1.18.0.
+
+## Version 4.6.1
+
+- Fixed incorrect results of all modular arithmetic when Microsoft SEAL is compiled with MSVC for ARM64. When the `__umulh` intrinsic was used, `util::multiply_uint64` returned the two halves of the 128-bit product in the wrong order. `__umulh` is used by default when building on an ARM64 machine, and when installing from vcpkg for ARM64. The problem was introduced in Microsoft SEAL 4.3.0.
+- Fixed the first CMake configuration failing with a `try_run` error when cross-compiling without `CMAKE_CROSSCOMPILING_EMULATOR`. The checks for intrinsics and `memset_s` now only compile their test programs in that case.
+
+## Version 4.6.0
+
+- Added `compr_mode_type::bitpack` (`ComprModeType.BitPack` in .NET), a serialization mode that removes the always-zero high-order bits of the 64-bit words in ciphertext and key data, as well as low-order bits that are zero in all of them, such as bits an application has cleared ([PR #758](https://github.com/microsoft/SEAL/pull/758)). For such data it is typically smaller and faster than Zstandard, but it is not a general-purpose compressor: for other data, such as plaintexts, Zstandard can produce much smaller output. Bit-packing requires no external library and is always available, but it is not the default compression mode and performs no integrity checking.
+- Bit-packed objects use serialization format version 4.6, so earlier releases of Microsoft SEAL reject them as incompatible. Added `Serialization::format_version_minor_bitpack`. `Serialization::Save` writes at least this format version for bit-packed objects, and `Serialization::IsValidHeader` rejects bit-packed data with an older format version.
+- Building Microsoft SEAL for a big-endian platform now fails with an error. Microsoft SEAL saves data in the platform's byte order and has never supported big-endian platforms: data saved on a big-endian platform cannot be loaded on a little-endian one, or vice versa.
+
+## Version 4.5.1
+
+- Fixed loading of zlib- or Zstandard-compressed objects to throw an exception instead of terminating the process with `std::terminate` when the input ends before the compressed data does. This affected truncated input on a non-seekable stream, and a truncated compressed object nested in another compressed object, such as the data of a `Ciphertext`, on any stream. The problem was introduced in Microsoft SEAL 4.3.3.
+- Fixed undefined behavior in `util::compare_uint` for operands of zero length.
+- Fixed AddressSanitizer reporting use-after-poison when Microsoft SEAL is built with AddressSanitizer and saves with Zstandard compression. Zstandard poisons parts of its workspace, which it allocates from a Microsoft SEAL memory pool, and does not unpoison them when it frees the workspace, so Microsoft SEAL now unpoisons the memory before returning it to the pool.
+
+## Version 4.5.0
+
+- `SEALHeader` now records the serialization format version instead of the library version: 4.1 for NTT-form ciphertexts (BGV ciphertexts are in NTT form since Microsoft SEAL 4.1), and 4.0 for everything else. Microsoft SEAL 4.0 can now load objects saved by this version, except NTT-form ciphertexts (BGV, CKKS, or BFV transformed to NTT form) and encryption parameters with more than 64 coefficient modulus primes. Microsoft SEAL 4.1-4.3 still cannot load objects saved by this version. The serialization format is otherwise unchanged. `SEALHeader` version fields no longer identify the library that wrote the object.
+- Added `Serialization::format_version_major`, `Serialization::format_version_minor`, `Serialization::format_version_minor_ntt_ciphertext`, and an optional `version_minor` parameter to `Serialization::Save`.
+- Added `Serialization_FormatVersionMajor` and `Serialization_FormatVersionMinor` to the C API, and `Serialization.FormatVersionMajor` and `Serialization.FormatVersionMinor` to the .NET wrapper.
+- `MemoryPoolHandle::operator==` and `operator!=` are now `const`, so `const` handles can be compared; C++20 compilers without P2468 no longer report the comparison as ambiguous ([issue #710](https://github.com/microsoft/SEAL/issues/710)).
+- Fixed undefined behavior in `util::set_uint` for a self assignment to a shorter result.
+- Fixed multiple definition link errors with GCC when Microsoft SEAL is built as C++14 and linked with code compiled as C++17 or newer.
+- Fixed `SEAL_USE_CXX17=OFF` to build Microsoft SEAL as C++14 also with compilers that default to C++17 or newer, such as GCC 11 or newer. A C++ standard set with `CMAKE_CXX_STANDARD` takes precedence.
+- Fixed the pkg-config files `seal.pc` and `seal_shared.pc` to require all of Microsoft GSL, zlib, Zstandard, and Intel HEXL that Microsoft SEAL was built with when `SEAL_BUILD_DEPS=OFF`. The requirements are now listed in a single `Requires` field, as pkg-config and vcpkg use only one.
+- Fixed ignored `[[nodiscard]]` results, an unqualified `std::move`, and unused lambda captures in the tests ([issue #710](https://github.com/microsoft/SEAL/issues/710)).
+
 ## Version 4.4.5
 
 - Fixed `seal::random_bytes` to fill the caller's buffer with `std::memcpy` instead of storing through a `reinterpret_cast` `std::uint32_t` pointer.

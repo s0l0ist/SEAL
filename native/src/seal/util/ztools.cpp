@@ -19,6 +19,19 @@
 #include <memory>
 #include <sstream>
 #include <unordered_map>
+#include <utility>
+
+// GCC and MSVC define __SANITIZE_ADDRESS__ when building with AddressSanitizer; Clang reports it via __has_feature.
+#if defined(__SANITIZE_ADDRESS__)
+#define SEAL_ZTOOLS_ASAN
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define SEAL_ZTOOLS_ASAN
+#endif
+#endif
+#ifdef SEAL_ZTOOLS_ASAN
+#include <sanitizer/asan_interface.h>
+#endif
 
 using namespace std;
 
@@ -39,23 +52,44 @@ namespace seal
                     PointerStorage(MemoryPoolHandle pool) : pool_(std::move(pool))
                     {}
 
+#ifdef SEAL_ZTOOLS_ASAN
+                    ~PointerStorage()
+                    {
+                        // Memory that was never freed, e.g. after a compression error, also returns to the pool.
+                        for (auto &entry : ptr_storage_)
+                        {
+                            __asan_unpoison_memory_region(entry.first, entry.second.second);
+                        }
+                    }
+#endif
+
                     void *allocate(size_t size)
                     {
                         auto ptr = util::allocate<seal_byte>(size, pool_);
                         void *addr = reinterpret_cast<void *>(ptr.get());
-                        ptr_storage_[addr] = std::move(ptr);
+                        ptr_storage_[addr] = make_pair(std::move(ptr), size);
                         return addr;
                     }
 
                     void free(void *addr)
                     {
+#ifdef SEAL_ZTOOLS_ASAN
+                        // Zstandard built with AddressSanitizer poisons parts of its workspace and does not unpoison
+                        // them before calling a custom free function. The memory returns to the memory pool, which
+                        // may clear or reuse it, so unpoison it first.
+                        auto it = ptr_storage_.find(addr);
+                        if (it != ptr_storage_.end())
+                        {
+                            __asan_unpoison_memory_region(addr, it->second.second);
+                        }
+#endif
                         ptr_storage_.erase(addr);
                     }
 
                 private:
                     MemoryPoolHandle pool_;
 
-                    unordered_map<void *, Pointer<seal_byte>> ptr_storage_;
+                    unordered_map<void *, pair<Pointer<seal_byte>, size_t>> ptr_storage_;
                 };
             } // namespace
 
@@ -75,7 +109,14 @@ namespace seal
 
             InflateGetBuffer::~InflateGetBuffer()
             {
-                in_stream_.exceptions(in_stream_except_mask_);
+                // Restoring the mask throws if truncated input left the stream in a failed state, but a destructor
+                // must not throw. The mask is restored anyway, and the stream keeps its error state for the caller.
+                try
+                {
+                    in_stream_.exceptions(in_stream_except_mask_);
+                }
+                catch (...)
+                {}
             }
 
             streamsize InflateGetBuffer::read_compressed(unsigned char *dst, streamsize count)
@@ -88,7 +129,21 @@ namespace seal
                 in_stream_.read(reinterpret_cast<char *>(dst), to_read);
                 streamsize got = in_stream_.gcount();
                 in_remaining_ -= got;
+                in_read_ += static_cast<uint64_t>(got);
                 return got;
+            }
+
+            bool InflateGetBuffer::expansion_exceeded(uint64_t produced) const noexcept
+            {
+                if (!expansion_max_ratio_ || produced <= expansion_free_bytes_)
+                {
+                    return false;
+                }
+
+                // Input read ahead into in_buf_ but not yet consumed by the decompressor does not count. The
+                // comparison is produced - free_bytes > max_ratio * consumed, rearranged to avoid overflow.
+                uint64_t consumed = in_read_ - static_cast<uint64_t>(in_avail_);
+                return (produced - expansion_free_bytes_ - 1) / expansion_max_ratio_ >= consumed;
             }
 
             InflateGetBuffer::int_type InflateGetBuffer::underflow()
@@ -110,6 +165,11 @@ namespace seal
                     }
                     if (produced)
                     {
+                        if (expansion_exceeded(static_cast<uint64_t>(total_produced_) + produced))
+                        {
+                            failed_ = true;
+                            break;
+                        }
                         char_type *base = reinterpret_cast<char_type *>(out_buf_.get());
                         setg(base, base, base + produced);
                         total_produced_ += static_cast<streamoff>(produced);

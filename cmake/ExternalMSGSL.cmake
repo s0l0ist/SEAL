@@ -4,7 +4,7 @@
 FetchContent_Declare(
     msgsl
     GIT_REPOSITORY https://github.com/microsoft/GSL.git
-    GIT_TAG        152d6eb989a1ecd23fe9c9cfb2fb8cfc7c0cd0c1 # 4.2.2
+    GIT_TAG        fbd20b8e8c52cba04dbc869cc9068a7800a5665d # 5.0.1
 )
 FetchContent_GetProperties(msgsl)
 
@@ -20,6 +20,6 @@ if(NOT msgsl_POPULATED)
 
     add_subdirectory(
         ${msgsl_SOURCE_DIR}
-        ${msgsl_SOURCE_DIR}/../msgsl-build
+        ${msgsl_BINARY_DIR}
         EXCLUDE_FROM_ALL)
 endif()

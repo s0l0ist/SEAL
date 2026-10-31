@@ -5,6 +5,9 @@
 #include "seal/modulus.h"
 #include "seal/util/uintarithsmallmod.h"
 #include "seal/util/uintcore.h"
+#include <random>
+#include <utility>
+#include <vector>
 #include "gtest/gtest.h"
 
 using namespace seal::util;
@@ -182,6 +185,255 @@ namespace sealtest
             input[1] = 79797979797979;
             ASSERT_EQ(1010101010101ULL, barrett_reduce_128(input, mod));
         }
+
+        namespace
+        {
+            // (hi * 2^64 + lo) mod p by bit-by-bit long division
+            uint64_t reference_mod_128(uint64_t lo, uint64_t hi, uint64_t p)
+            {
+                uint64_t r = 0;
+                for (int bit = 127; bit >= 0; bit--)
+                {
+                    uint64_t b = bit >= 64 ? (hi >> (bit - 64)) & 1 : (lo >> bit) & 1;
+                    r = (r << 1) | b;
+                    if (r >= p)
+                    {
+                        r -= p;
+                    }
+                }
+                return r;
+            }
+
+            // Odd, even, power-of-two, tiny, and maximal (61-bit) moduli
+            vector<uint64_t> test_moduli(mt19937_64 &rng)
+            {
+                vector<uint64_t> moduli{ 2, 3, 5, 17, 65537 };
+                moduli.push_back((uint64_t(1) << 61) - 1);
+                moduli.push_back((uint64_t(1) << 60) + 1);
+                moduli.push_back(0x1fffffffffe00001ULL);
+                moduli.push_back(0xffffffffffc0001ULL);
+                for (int k = 2; k <= 61; k++)
+                {
+                    moduli.push_back(uint64_t(1) << (k - 1));
+                    moduli.push_back((uint64_t(1) << k) - 1);
+                    moduli.push_back((rng() >> (64 - k)) | (uint64_t(1) << (k - 1)) | 1);
+                }
+                return moduli;
+            }
+        } // namespace
+
+        TEST(UIntArithSmallMod, BarrettReduce128Random)
+        {
+            mt19937_64 rng(777);
+            for (uint64_t p : test_moduli(rng))
+            {
+                Modulus mod(p);
+                vector<pair<uint64_t, uint64_t>> inputs{ { 0, 0 },
+                                                         { 1, 0 },
+                                                         { p - 1, 0 },
+                                                         { p, 0 },
+                                                         { ~uint64_t(0), 0 },
+                                                         { 0, ~uint64_t(0) },
+                                                         { ~uint64_t(0), ~uint64_t(0) },
+                                                         { 0, p - 1 },
+                                                         { ~uint64_t(0), p - 1 },
+                                                         { 0, p } };
+
+                // Squares of the largest values in [0, p), [0, 2p), and [0, 4p)
+                for (uint64_t a : { p - 1, 2 * p - 1, 4 * p - 1 })
+                {
+                    unsigned long long z[2];
+                    multiply_uint64(a, a, z);
+                    inputs.emplace_back(z[0], z[1]);
+                }
+
+                for (int i = 0; i < 300; i++)
+                {
+                    inputs.emplace_back(rng(), rng());
+                    inputs.emplace_back(rng(), rng() % p);
+                }
+
+                for (auto &in : inputs)
+                {
+                    uint64_t input[2]{ in.first, in.second };
+                    ASSERT_EQ(reference_mod_128(in.first, in.second, p), barrett_reduce_128(input, mod))
+                        << "p = " << p << ", input = " << in.second << " * 2^64 + " << in.first;
+                }
+            }
+        }
+
+        TEST(UIntArithSmallMod, TwoPow64Mod)
+        {
+            mt19937_64 rng(778);
+            for (uint64_t p : test_moduli(rng))
+            {
+                ASSERT_EQ(reference_mod_128(0, 1, p), two_pow_64_mod(Modulus(p))) << "p = " << p;
+            }
+        }
+
+        TEST(UIntArithSmallMod, SubIfGeUInt64)
+        {
+            const uint64_t max = ~uint64_t(0);
+            ASSERT_EQ(0ULL, sub_if_ge_uint64(0, 0));
+            ASSERT_EQ(0ULL, sub_if_ge_uint64(0, 1));
+            ASSERT_EQ(0ULL, sub_if_ge_uint64(1, 1));
+            ASSERT_EQ(1ULL, sub_if_ge_uint64(1, 2));
+            ASSERT_EQ(1ULL, sub_if_ge_uint64(3, 2));
+            ASSERT_EQ(0ULL, sub_if_ge_uint64(max, max));
+            ASSERT_EQ(max - 1, sub_if_ge_uint64(max - 1, max));
+            ASSERT_EQ(max, sub_if_ge_uint64(max, 0));
+            ASSERT_EQ(uint64_t(1) << 63, sub_if_ge_uint64(max, (uint64_t(1) << 63) - 1));
+            ASSERT_EQ((uint64_t(1) << 63) - 1, sub_if_ge_uint64((uint64_t(1) << 63) - 1, uint64_t(1) << 63));
+        }
+
+        TEST(UIntArithSmallMod, LessThanMaskUInt64)
+        {
+            const uint64_t max = ~uint64_t(0);
+            ASSERT_EQ(0ULL, less_than_mask_uint64(0, 0));
+            ASSERT_EQ(max, less_than_mask_uint64(0, 1));
+            ASSERT_EQ(0ULL, less_than_mask_uint64(1, 0));
+            ASSERT_EQ(0ULL, less_than_mask_uint64(max, max));
+            ASSERT_EQ(max, less_than_mask_uint64(max - 1, max));
+            ASSERT_EQ(0ULL, less_than_mask_uint64(max, max - 1));
+            ASSERT_EQ(max, less_than_mask_uint64((uint64_t(1) << 63) - 1, uint64_t(1) << 63));
+        }
+
+        TEST(UIntArithSmallMod, SelectUInt64)
+        {
+            const uint64_t max = ~uint64_t(0);
+            ASSERT_EQ(1ULL, select_uint64(true, 1, 2));
+            ASSERT_EQ(2ULL, select_uint64(false, 1, 2));
+            ASSERT_EQ(max, select_uint64(true, max, 0));
+            ASSERT_EQ(0ULL, select_uint64(false, max, 0));
+            ASSERT_EQ(0ULL, select_uint64(true, 0, max));
+            ASSERT_EQ(max, select_uint64(false, 0, max));
+        }
+
+        TEST(UIntArithSmallMod, BranchFreeHelpersRandom)
+        {
+            // Compare with plain C++ on random values and on values close to each other
+            mt19937_64 rng(5);
+            for (int i = 0; i < 100000; i++)
+            {
+                uint64_t x = rng();
+                uint64_t y = (i & 1) ? rng() : x + (rng() % 5) - 2;
+                bool c = (rng() & 1) != 0;
+
+                ASSERT_EQ(x >= y ? x - y : x, sub_if_ge_uint64(x, y));
+                ASSERT_EQ(x < y ? ~uint64_t(0) : uint64_t(0), less_than_mask_uint64(x, y));
+                ASSERT_EQ(c ? x : y, select_uint64(c, x, y));
+
+                uint64_t m = rng();
+                ASSERT_EQ(x < y ? x - y + m : x - y, sub_add_if_lt_uint64(x, y, m));
+
+                // The same variable as two arguments checks the register constraints of the inline assembly
+                ASSERT_EQ(0ULL, sub_add_if_lt_uint64(x, x, m));
+                ASSERT_EQ(x < y ? x - y + x : x - y, sub_add_if_lt_uint64(x, y, x));
+                ASSERT_EQ(x < y ? x : x - y, sub_add_if_lt_uint64(x, y, y));
+                ASSERT_EQ(0ULL, sub_if_ge_uint64(x, x));
+                ASSERT_EQ(0ULL, less_than_mask_uint64(x, x));
+                ASSERT_EQ(x, select_uint64(c, x, x));
+            }
+        }
+
+        TEST(UIntArithSmallMod, AddIfGeUInt)
+        {
+            const uint64_t max = ~uint64_t(0);
+
+            // Compare with add_uint on random values and on values close to the threshold. Words equal to max make
+            // carries run through several words.
+            mt19937_64 rng(13);
+            for (size_t count = 1; count <= 5; count++)
+            {
+                for (int i = 0; i < 20000; i++)
+                {
+                    uint64_t x = (i % 3) ? rng() : max - (rng() % 3);
+                    uint64_t threshold = (i & 1) ? rng() : x + (rng() % 5) - 2;
+                    vector<uint64_t> y(count);
+                    for (auto &word : y)
+                    {
+                        word = (rng() % 4) ? rng() : max;
+                    }
+
+                    vector<uint64_t> expected(count, 0);
+                    if (x >= threshold)
+                    {
+                        add_uint(y.data(), count, x, expected.data());
+                    }
+                    else
+                    {
+                        expected[0] = x;
+                    }
+
+                    // Every word of the result is written
+                    vector<uint64_t> result(count, 0xA5A5A5A5A5A5A5A5ULL);
+                    add_if_ge_uint(x, threshold, y.data(), count, result.data());
+                    ASSERT_EQ(expected, result) << "x = " << x << ", threshold = " << threshold;
+                }
+            }
+
+            uint64_t y[3]{ max, max, max };
+            uint64_t result[3]{ 1, 1, 1 };
+            add_if_ge_uint(1, 1, y, 3, result);
+            ASSERT_EQ(vector<uint64_t>({ 0, 0, 0 }), vector<uint64_t>(result, result + 3));
+            add_if_ge_uint(5, 6, y, 3, result);
+            ASSERT_EQ(vector<uint64_t>({ 5, 0, 0 }), vector<uint64_t>(result, result + 3));
+            add_if_ge_uint(max, max, y, 3, result);
+            ASSERT_EQ(vector<uint64_t>({ max - 1, 0, 0 }), vector<uint64_t>(result, result + 3));
+
+            uint64_t one[2]{ 1, 0 };
+            add_if_ge_uint(max, 0, one, 2, result);
+            ASSERT_EQ(vector<uint64_t>({ 0, 1 }), vector<uint64_t>(result, result + 2));
+        }
+
+        TEST(UIntArithSmallMod, MontgomeryReduce128)
+        {
+            mt19937_64 rng(779);
+
+            // Odd moduli of up to 63 bits
+            vector<uint64_t> moduli{ 3,
+                                     5,
+                                     65537,
+                                     (uint64_t(1) << 61) - 1,
+                                     0x1fffffffffe00001ULL,
+                                     (uint64_t(1) << 62) + 1,
+                                     (uint64_t(1) << 63) - 25 };
+            for (int k = 2; k <= 63; k++)
+            {
+                moduli.push_back((rng() >> (64 - k)) | (uint64_t(1) << (k - 1)) | 1);
+            }
+
+            for (uint64_t p : moduli)
+            {
+                const uint64_t neg_inv_p = neg_inv_mod_2_64(p);
+                ASSERT_EQ(~uint64_t(0), neg_inv_p * p) << "p = " << p;
+
+                // The result r satisfies r * 2^64 = hi * 2^64 + lo (mod p) for inputs less than p * 2^64
+                vector<pair<uint64_t, uint64_t>> inputs{ { 0, 0 }, { 1, 0 },     { ~uint64_t(0), 0 },
+                                                         { 0, 1 }, { 0, p - 1 }, { ~uint64_t(0), p - 1 } };
+                for (int i = 0; i < 300; i++)
+                {
+                    inputs.emplace_back(rng(), rng() % p);
+                }
+
+                for (auto &in : inputs)
+                {
+                    uint64_t r = montgomery_reduce_128(in.first, in.second, p, neg_inv_p);
+                    ASSERT_LT(r, p);
+                    ASSERT_EQ(reference_mod_128(in.first, in.second, p), reference_mod_128(0, r, p))
+                        << "p = " << p << ", input = " << in.second << " * 2^64 + " << in.first;
+                }
+            }
+        }
+
+#ifdef SEAL_DEBUG
+        TEST(UIntArithSmallMod, MontgomeryRequiresOddModulus)
+        {
+            ASSERT_THROW(static_cast<void>(neg_inv_mod_2_64(4)), invalid_argument);
+            ASSERT_THROW(DyadicMontgomeryReducer{ Modulus(4) }, invalid_argument);
+            ASSERT_NO_THROW(DyadicMontgomeryReducer{ Modulus((uint64_t(1) << 61) - 1) });
+        }
+#endif
 
         TEST(UIntArithSmallMod, MultiplyUIntMod)
         {

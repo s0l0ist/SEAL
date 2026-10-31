@@ -106,7 +106,11 @@ namespace seal
         inline std::streamoff save(
             std::ostream &stream, compr_mode_type compr_mode = Serialization::compr_mode_default) const
         {
-            return pk_.save(stream, compr_mode);
+            // Public keys have always been in NTT form, so unlike BGV ciphertexts they keep format version 4.0.
+            using namespace std::placeholders;
+            return Serialization::Save(
+                std::bind(&Ciphertext::save_members, &pk_, _1), pk_.save_size(compr_mode_type::none), stream,
+                compr_mode, false);
         }
 
         /**
@@ -124,8 +128,14 @@ namespace seal
         */
         inline std::streamoff unsafe_load(const SEALContext &context, std::istream &stream)
         {
+            using namespace std::placeholders;
             Ciphertext new_pk(pk_.pool());
-            auto in_size = new_pk.unsafe_load(context, stream);
+
+            // A valid PublicKey has size SEAL_CIPHERTEXT_SIZE_MIN, so reject larger ones before allocating memory
+            // for their data
+            auto in_size = Serialization::Load(
+                std::bind(&Ciphertext::load_members, &new_pk, context, _1, _2, std::size_t(SEAL_CIPHERTEXT_SIZE_MIN)),
+                stream, false);
             std::swap(pk_, new_pk);
             return in_size;
         }
@@ -169,7 +179,10 @@ namespace seal
         inline std::streamoff save(
             seal_byte *out, std::size_t size, compr_mode_type compr_mode = Serialization::compr_mode_default) const
         {
-            return pk_.save(out, size, compr_mode);
+            using namespace std::placeholders;
+            return Serialization::Save(
+                std::bind(&Ciphertext::save_members, &pk_, _1), pk_.save_size(compr_mode_type::none), out, size,
+                compr_mode, false);
         }
 
         /**
@@ -190,8 +203,14 @@ namespace seal
         */
         inline std::streamoff unsafe_load(const SEALContext &context, const seal_byte *in, std::size_t size)
         {
+            using namespace std::placeholders;
             Ciphertext new_pk(pk_.pool());
-            auto in_size = new_pk.unsafe_load(context, in, size);
+
+            // A valid PublicKey has size SEAL_CIPHERTEXT_SIZE_MIN, so reject larger ones before allocating memory
+            // for their data
+            auto in_size = Serialization::Load(
+                std::bind(&Ciphertext::load_members, &new_pk, context, _1, _2, std::size_t(SEAL_CIPHERTEXT_SIZE_MIN)),
+                in, size, false);
             std::swap(pk_, new_pk);
             return in_size;
         }

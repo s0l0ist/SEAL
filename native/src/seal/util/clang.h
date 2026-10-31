@@ -13,6 +13,9 @@
 // Read in config.h
 #include "seal/util/config.h"
 
+// Force inline
+#define SEAL_FORCE_INLINE inline __attribute__((always_inline))
+
 #ifdef SEAL_USE_ALIGNED_ALLOC
 #ifdef _WIN32
 // The Windows C runtime provides no std::aligned_alloc; _aligned_malloc results must be

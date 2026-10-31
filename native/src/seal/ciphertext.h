@@ -54,6 +54,8 @@ namespace seal
     */
     class Ciphertext
     {
+        friend class PublicKey;
+
     public:
         using ct_coeff_type = std::uint64_t;
 
@@ -495,7 +497,7 @@ namespace seal
             using namespace std::placeholders;
             return Serialization::Save(
                 std::bind(&Ciphertext::save_members, this, _1), save_size(compr_mode_type::none), stream, compr_mode,
-                false);
+                false, format_version_minor());
         }
 
         /**
@@ -514,7 +516,9 @@ namespace seal
         inline std::streamoff unsafe_load(const SEALContext &context, std::istream &stream)
         {
             using namespace std::placeholders;
-            return Serialization::Load(std::bind(&Ciphertext::load_members, this, context, _1, _2), stream, false);
+            return Serialization::Load(
+                std::bind(&Ciphertext::load_members, this, context, _1, _2, std::size_t(SEAL_CIPHERTEXT_SIZE_MAX)),
+                stream, false);
         }
 
         /**
@@ -559,7 +563,7 @@ namespace seal
             using namespace std::placeholders;
             return Serialization::Save(
                 std::bind(&Ciphertext::save_members, this, _1), save_size(compr_mode_type::none), out, size, compr_mode,
-                false);
+                false, format_version_minor());
         }
 
         /**
@@ -581,7 +585,9 @@ namespace seal
         inline std::streamoff unsafe_load(const SEALContext &context, const seal_byte *in, std::size_t size)
         {
             using namespace std::placeholders;
-            return Serialization::Load(std::bind(&Ciphertext::load_members, this, context, _1, _2), in, size, false);
+            return Serialization::Load(
+                std::bind(&Ciphertext::load_members, this, context, _1, _2, std::size_t(SEAL_CIPHERTEXT_SIZE_MAX)), in,
+                size, false);
         }
 
         /**
@@ -704,7 +710,15 @@ namespace seal
 
         void save_members(std::ostream &stream) const;
 
-        void load_members(const SEALContext &context, std::istream &stream, SEALVersion version);
+        // BGV ciphertexts are in NTT form since Microsoft SEAL 4.1; see Serialization.
+        SEAL_NODISCARD inline std::uint8_t format_version_minor() const noexcept
+        {
+            return is_ntt_form_ ? Serialization::format_version_minor_ntt_ciphertext
+                                : Serialization::format_version_minor;
+        }
+
+        // Rejects a ciphertext larger than max_size before allocating memory for its data.
+        void load_members(const SEALContext &context, std::istream &stream, SEALVersion version, std::size_t max_size);
 
         inline bool has_seed_marker() const noexcept
         {

@@ -23,7 +23,10 @@ namespace SEALNetExamples
             Utilities.PrintExampleBanner("Example: Serialization");
 
             /*
-            We require ZLIB or Zstandard support for this example to be available.
+            We require ZLIB or Zstandard support for this example to be available,
+            because it saves objects with the default compression mode and discusses
+            the compressed sizes. Without ZLIB or Zstandard, the default compression
+            mode is ComprModeType.None; bit-packing is never the default.
             */
             if (!Serialization.IsSupportedComprMode(ComprModeType.ZLIB) &&
                 !Serialization.IsSupportedComprMode(ComprModeType.ZSTD))
@@ -140,10 +143,12 @@ namespace SEALNetExamples
                     long size = parms.Save(sharedStream, ComprModeType.None);
                     long size = parms.Save(sharedStream, ComprModeType.ZLIB);
                     long size = parms.Save(sharedStream, ComprModeType.ZSTD);
+                    long size = parms.Save(sharedStream, ComprModeType.BitPack);
 
                 If Microsoft SEAL is compiled with Zstandard or ZLIB support, the default
                 is to use one of them. If available, Zstandard is preferred over ZLIB due
-                to its speed.
+                to its speed. Bit-packing is always available without Zstandard or ZLIB,
+                but it is not the default.
 
                 Compression can have a substantial impact on the serialized data size,
                 because ciphertext and key data consists of many uniformly random integers
@@ -154,7 +159,14 @@ namespace SEALNetExamples
                 zero bytes corresponding to the high-order bytes of the 64-bit words. One
                 convenient way to get rid of these zeros is to apply a general-purpose
                 compression algorithm on the encrypted data. The compression rate can be
-                significant (up to 50-60%) when using CKKS with small primes.
+                significant (up to 50-60%) when using CKKS with small primes. Bit-packing
+                instead removes the zero high-order bits of the 64-bit words directly, as
+                well as low-order bits that are zero in all of them, such as bits an
+                application has cleared. For ciphertext and key data it is typically
+                smaller and faster than Zstandard, but it is not a general-purpose
+                compressor, and for other data such as plaintexts Zstandard can produce
+                much smaller output. Bit-packing performs no integrity checking, and
+                loading bit-packed objects requires Microsoft SEAL 4.6 or later.
                 */
 
                 /*
@@ -167,8 +179,8 @@ namespace SEALNetExamples
                 In more detail, the output of EncryptionParameters.SaveSize is as follows:
 
                     - Exact buffer size required for ComprModeType.None;
-                    - Upper bound on the size required for ComprModeType.ZLIB or
-                      ComprModeType.ZSTD.
+                    - Upper bound on the size required for ComprModeType.ZLIB,
+                      ComprModeType.ZSTD, or ComprModeType.BitPack.
 
                 As we can see from the print-out, the sizes returned by these functions
                 are significantly larger than the compressed size written into the shared
@@ -377,9 +389,21 @@ namespace SEALNetExamples
                 long sizeEncryptedProd = encryptedProd.Save(dataStream);
                 dataStream.Seek(0, SeekOrigin.Begin);
 
+                /*
+                For comparison, we also save encryptedProd with bit-packing, which is
+                designed for ciphertext and key data and is typically smaller and faster
+                than the default compression mode for such data. We save it to a separate
+                stream, because the client will load the result from dataStream.
+                */
+                using MemoryStream bitPackStream = new MemoryStream();
+                long sizeEncryptedProdBitPack = encryptedProd.Save(bitPackStream, ComprModeType.BitPack);
+
                 Utilities.PrintLine();
                 Console.Write($"Ciphertext (secret-key): ");
                 Console.WriteLine($"wrote {sizeEncryptedProd} bytes");
+                Console.Write("             ");
+                Console.Write($"Ciphertext (secret-key, bit-packed): ");
+                Console.WriteLine($"wrote {sizeEncryptedProdBitPack} bytes");
             }
 
             /*
@@ -430,8 +454,8 @@ namespace SEALNetExamples
 
                 [offset 0] 2-byte magic number 0xA15E (Serialization.SEALMagic)
                 [offset 2] 1-byte indicating the header size in bytes (always 16)
-                [offset 3] 1-byte indicating the Microsoft SEAL major version number
-                [offset 4] 1-byte indicating the Microsoft SEAL minor version number
+                [offset 3] 1-byte indicating the serialization format major version number
+                [offset 4] 1-byte indicating the serialization format minor version number
                 [offset 5] 1-byte indicating the compression mode type
                 [offset 6] 2-byte reserved field (unused)
                 [offset 8] 8-byte size in bytes of the serialized data, including the header

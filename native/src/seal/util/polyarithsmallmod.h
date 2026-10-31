@@ -74,36 +74,8 @@ namespace seal
             });
         }
 
-        inline void negate_poly_coeffmod(
-            ConstCoeffIter poly, std::size_t coeff_count, const Modulus &modulus, CoeffIter result)
-        {
-#ifdef SEAL_DEBUG
-            if (!poly && coeff_count > 0)
-            {
-                throw std::invalid_argument("poly");
-            }
-            if (modulus.is_zero())
-            {
-                throw std::invalid_argument("modulus");
-            }
-            if (!result && coeff_count > 0)
-            {
-                throw std::invalid_argument("result");
-            }
-#endif
-            const uint64_t modulus_value = modulus.value();
-            SEAL_ITERATE(iter(poly, result), coeff_count, [&](auto I) {
-                auto coeff = get<0>(I);
-#ifdef SEAL_DEBUG
-                if (coeff >= modulus_value)
-                {
-                    throw std::out_of_range("poly");
-                }
-#endif
-                std::int64_t non_zero = (coeff != 0);
-                get<1>(I) = (modulus_value - coeff) & static_cast<std::uint64_t>(-non_zero);
-            });
-        }
+        void negate_poly_coeffmod(
+            ConstCoeffIter poly, std::size_t coeff_count, const Modulus &modulus, CoeffIter result);
 
         inline void negate_poly_coeffmod(
             ConstRNSIter poly, std::size_t coeff_modulus_size, ConstModulusIter modulus, RNSIter result)
@@ -570,6 +542,23 @@ namespace seal
                 dyadic_product_coeffmod(get<0>(I), get<1>(I), coeff_modulus_size, modulus, get<2>(I));
             });
         }
+
+        /**
+        Computes result[i] = (operand1[i] * operand2[i] + addend[i]) mod modulus for reduced operand2 and addend and any
+        64-bit operand1 (less than 4 * modulus with Intel HEXL). result may alias operand1 or operand2, but not addend.
+        */
+        void dyadic_product_add_coeffmod(
+            ConstCoeffIter operand1, ConstCoeffIter operand2, ConstCoeffIter addend, std::size_t coeff_count,
+            const Modulus &modulus, CoeffIter result);
+
+        /**
+        Computes result1[i] = operand1[i] * shared[i] mod modulus and result2[i] = operand2[i] * shared[i] mod modulus
+        for reduced shared and any 64-bit operand1 and operand2 (less than 4 * modulus with Intel HEXL). result1 may
+        alias operand1, and result2 operand2.
+        */
+        void dyadic_product_shared_coeffmod(
+            ConstCoeffIter operand1, ConstCoeffIter operand2, ConstCoeffIter shared, std::size_t coeff_count,
+            const Modulus &modulus, CoeffIter result1, CoeffIter result2);
 
         std::uint64_t poly_infty_norm_coeffmod(ConstCoeffIter operand, std::size_t coeff_count, const Modulus &modulus);
 

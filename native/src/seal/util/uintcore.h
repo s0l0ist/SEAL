@@ -315,17 +315,12 @@ namespace seal
                 throw std::invalid_argument("result");
             }
 #endif
-            if (value == result || !value_uint64_count)
+            std::size_t min_uint64_count = std::min<>(value_uint64_count, result_uint64_count);
+            if (value != result && value_uint64_count)
             {
-                // Fast path to handle self assignment.
-                std::fill(result + value_uint64_count, result + result_uint64_count, std::uint64_t(0));
-            }
-            else
-            {
-                std::size_t min_uint64_count = std::min<>(value_uint64_count, result_uint64_count);
                 std::copy_n(value, min_uint64_count, result);
-                std::fill(result + min_uint64_count, result + result_uint64_count, std::uint64_t(0));
             }
+            std::fill(result + min_uint64_count, result + result_uint64_count, std::uint64_t(0));
         }
 
         /**
@@ -404,12 +399,10 @@ namespace seal
             }
 #endif
             int result = 0;
-            operand1 += uint64_count - 1;
-            operand2 += uint64_count - 1;
-
-            for (; (result == 0) && uint64_count--; operand1--, operand2--)
+            for (; (result == 0) && uint64_count--;)
             {
-                result = (*operand1 > *operand2) - (*operand1 < *operand2);
+                result = (operand1[uint64_count] > operand2[uint64_count]) -
+                         (operand1[uint64_count] < operand2[uint64_count]);
             }
             return result;
         }
@@ -429,26 +422,22 @@ namespace seal
             }
 #endif
             int result = 0;
-            operand1 += operand1_uint64_count - 1;
-            operand2 += operand2_uint64_count - 1;
-
             std::size_t min_uint64_count = std::min<>(operand1_uint64_count, operand2_uint64_count);
 
-            operand1_uint64_count -= min_uint64_count;
-            for (; (result == 0) && operand1_uint64_count--; operand1--)
+            for (; (result == 0) && operand1_uint64_count > min_uint64_count;)
             {
-                result = (*operand1 > 0);
+                result = (operand1[--operand1_uint64_count] > 0);
             }
 
-            operand2_uint64_count -= min_uint64_count;
-            for (; (result == 0) && operand2_uint64_count--; operand2--)
+            for (; (result == 0) && operand2_uint64_count > min_uint64_count;)
             {
-                result = -(*operand2 > 0);
+                result = -(operand2[--operand2_uint64_count] > 0);
             }
 
-            for (; (result == 0) && min_uint64_count--; operand1--, operand2--)
+            for (; (result == 0) && min_uint64_count--;)
             {
-                result = (*operand1 > *operand2) - (*operand1 < *operand2);
+                result = (operand1[min_uint64_count] > operand2[min_uint64_count]) -
+                         (operand1[min_uint64_count] < operand2[min_uint64_count]);
             }
             return result;
         }

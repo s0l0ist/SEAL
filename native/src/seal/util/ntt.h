@@ -57,7 +57,7 @@ namespace seal
 
             inline std::uint64_t guard(const std::uint64_t &a) const
             {
-                return SEAL_COND_SELECT(a >= two_times_modulus_, a - two_times_modulus_, a);
+                return sub_if_ge_uint64(a, two_times_modulus_);
             }
 
         private:
@@ -171,10 +171,10 @@ namespace seal
             // Inverse of coeff_count_ modulo modulus_.
             MultiplyUIntModOperand inv_degree_modulo_;
 
-            // Holds 1~(n-1)-th powers of root_ in bit-reversed order, the 0-th power is left unset.
+            // Holds 1~(n-1)-th powers of root_ in bit-reversed order, the 0-th power is at index 0.
             Pointer<MultiplyUIntModOperand> root_powers_;
 
-            // Holds 1~(n-1)-th powers of inv_root_ in scrambled order, the 0-th power is left unset.
+            // Holds 1~(n-1)-th powers of inv_root_ in scrambled order, the 0-th power is at index 0.
             Pointer<MultiplyUIntModOperand> inv_root_powers_;
 
             ModArithLazy mod_arith_lazy_;
@@ -336,7 +336,73 @@ namespace seal
                 operand, size, [&](auto I) { inverse_ntt_negacyclic_harvey(I, operand.coeff_modulus_size(), tables); });
         }
 
-        void ntt_negacyclic_harvey_new(CoeffIter operand, const NTTTables &tables);
-        void inverse_ntt_negacyclic_harvey_new(CoeffIter operand, const NTTTables &tables);
+        /**
+        Out-of-place ntt_negacyclic_harvey_lazy: operand in [0, 4q) (any 64-bit values if reduce_input), output in
+        [0, 4q). operand and result must be identical or disjoint.
+        */
+        void ntt_negacyclic_harvey_lazy(
+            ConstCoeffIter operand, const NTTTables &tables, bool reduce_input, CoeffIter result);
+
+        inline void ntt_negacyclic_harvey_lazy(ConstCoeffIter operand, const NTTTables &tables, CoeffIter result)
+        {
+            ntt_negacyclic_harvey_lazy(operand, tables, false, result);
+        }
+
+        inline void ntt_negacyclic_harvey_lazy(
+            ConstRNSIter operand, std::size_t coeff_modulus_size, ConstNTTTablesIter tables, RNSIter result)
+        {
+#ifdef SEAL_DEBUG
+            if (!operand)
+            {
+                throw std::invalid_argument("operand");
+            }
+            if (!tables)
+            {
+                throw std::invalid_argument("tables");
+            }
+            if (!result)
+            {
+                throw std::invalid_argument("result");
+            }
+#endif
+            SEAL_ITERATE(iter(operand, tables, result), coeff_modulus_size, [&](auto I) {
+                ntt_negacyclic_harvey_lazy(get<0>(I), get<1>(I), get<2>(I));
+            });
+        }
+
+        /**
+        Out-of-place inverse_ntt_negacyclic_harvey: operand in [0, 2q), output in [0, q). operand and result must be
+        identical or disjoint.
+        */
+        void inverse_ntt_negacyclic_harvey(ConstCoeffIter operand, const NTTTables &tables, CoeffIter result);
+
+        inline void inverse_ntt_negacyclic_harvey(
+            ConstRNSIter operand, std::size_t coeff_modulus_size, ConstNTTTablesIter tables, RNSIter result)
+        {
+#ifdef SEAL_DEBUG
+            if (!operand)
+            {
+                throw std::invalid_argument("operand");
+            }
+            if (!tables)
+            {
+                throw std::invalid_argument("tables");
+            }
+            if (!result)
+            {
+                throw std::invalid_argument("result");
+            }
+#endif
+            SEAL_ITERATE(iter(operand, tables, result), coeff_modulus_size, [&](auto I) {
+                inverse_ntt_negacyclic_harvey(get<0>(I), get<1>(I), get<2>(I));
+            });
+        }
+
+        /**
+        Out-of-place inverse_ntt_negacyclic_harvey times scalar (any 64-bit value) modulo q: operand in [0, 2q), output
+        in [0, q). operand and result must be identical or disjoint.
+        */
+        void inverse_ntt_negacyclic_harvey_scaled(
+            ConstCoeffIter operand, std::uint64_t scalar, const NTTTables &tables, CoeffIter result);
     } // namespace util
 } // namespace seal

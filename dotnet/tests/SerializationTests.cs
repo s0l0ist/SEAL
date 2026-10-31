@@ -28,7 +28,18 @@ namespace SEALNetTest
             invalidHeader.VersionMajor = 0x02;
             Assert.IsFalse(Serialization.IsValidHeader(invalidHeader));
             invalidHeader.VersionMajor = SEALVersion.Major;
-            invalidHeader.ComprMode = (ComprModeType)0x03;
+            invalidHeader.ComprMode = ComprModeType.BitPack;
+            for (byte minor = 0; minor < 6; minor++)
+            {
+                invalidHeader.VersionMinor = minor;
+                Assert.IsFalse(Serialization.IsValidHeader(invalidHeader));
+            }
+            invalidHeader.VersionMinor = 6;
+            Assert.IsTrue(Serialization.IsValidHeader(invalidHeader));
+            invalidHeader.VersionMajor = 3;
+            Assert.IsFalse(Serialization.IsValidHeader(invalidHeader));
+            invalidHeader.VersionMajor = SEALVersion.Major;
+            invalidHeader.ComprMode = (ComprModeType)0x04;
             Assert.IsFalse(Serialization.IsValidHeader(invalidHeader));
         }
 
@@ -70,37 +81,103 @@ namespace SEALNetTest
                 Assert.AreEqual(loaded.Size, header.Size);
             }
         }
-/*
+
+        [TestMethod]
+        public void FormatVersion()
+        {
+            Assert.AreEqual((byte)4, Serialization.FormatVersionMajor);
+            Assert.AreEqual((byte)0, Serialization.FormatVersionMinor);
+            Serialization.SEALHeader header = new Serialization.SEALHeader();
+            Assert.AreEqual(Serialization.FormatVersionMajor, header.VersionMajor);
+            Assert.AreEqual(Serialization.FormatVersionMinor, header.VersionMinor);
+
+            static Serialization.SEALHeader HeaderOf(Action<Stream> save)
+            {
+                using MemoryStream mem = new MemoryStream();
+                save(mem);
+                mem.Seek(offset: 0, loc: SeekOrigin.Begin);
+                Serialization.SEALHeader loaded = new Serialization.SEALHeader();
+                Serialization.LoadHeader(mem, loaded);
+                Assert.AreEqual(Serialization.FormatVersionMajor, loaded.VersionMajor);
+                return loaded;
+            }
+
+            // NTT-form ciphertexts (BGV, CKKS) use format version 4.1; everything else uses 4.0
+            foreach (SEALContext context in new[] { GlobalContext.BFVContext, GlobalContext.BGVContext, GlobalContext.CKKSContext })
+            {
+                KeyGenerator keygen = new KeyGenerator(context);
+                keygen.CreatePublicKey(out PublicKey publicKey);
+                keygen.CreateRelinKeys(out RelinKeys relinKeys);
+                Encryptor encryptor = new Encryptor(context, publicKey);
+                Ciphertext cipher = new Ciphertext();
+                encryptor.EncryptZero(cipher);
+
+                byte cipherMinor = (byte)(cipher.IsNTTForm ? 1 : 0);
+                Assert.AreEqual(context.KeyContextData.Parms.Scheme != SchemeType.BFV, cipher.IsNTTForm);
+                Assert.AreEqual(cipherMinor, HeaderOf(s => cipher.Save(s)).VersionMinor);
+                Assert.AreEqual((byte)6, HeaderOf(s => cipher.Save(s, ComprModeType.BitPack)).VersionMinor);
+                Assert.AreEqual(Serialization.FormatVersionMinor, HeaderOf(s => publicKey.Save(s)).VersionMinor);
+                Assert.AreEqual((byte)6, HeaderOf(s => publicKey.Save(s, ComprModeType.BitPack)).VersionMinor);
+                Assert.AreEqual(Serialization.FormatVersionMinor, HeaderOf(s => relinKeys.Save(s)).VersionMinor);
+                Assert.AreEqual((byte)6, HeaderOf(s => relinKeys.Save(s, ComprModeType.BitPack)).VersionMinor);
+                Assert.AreEqual(Serialization.FormatVersionMinor, HeaderOf(s => keygen.SecretKey.Save(s)).VersionMinor);
+                Assert.AreEqual((byte)6, HeaderOf(s => keygen.SecretKey.Save(s, ComprModeType.BitPack)).VersionMinor);
+                Assert.AreEqual(Serialization.FormatVersionMinor, HeaderOf(s => context.KeyContextData.Parms.Save(s)).VersionMinor);
+            }
+        }
         [TestMethod]
         public void SEALHeaderUpgrade()
         {
+            static MemoryStream Write(LegacyHeaders.SEALHeader_3_4 header_3_4)
+            {
+                MemoryStream mem = new MemoryStream();
+                using (BinaryWriter writer = new BinaryWriter(mem, Encoding.UTF8, true))
+                {
+                    writer.Write(header_3_4.Magic);
+                    writer.Write(header_3_4.ZeroByte);
+                    writer.Write((byte)header_3_4.ComprMode);
+                    writer.Write(header_3_4.Size);
+                    writer.Write(header_3_4.Reserved);
+                }
+                mem.Seek(offset: 0, loc: SeekOrigin.Begin);
+                return mem;
+            }
+
             LegacyHeaders.SEALHeader_3_4 header_3_4 = new LegacyHeaders.SEALHeader_3_4();
-
-            using MemoryStream mem = new MemoryStream();
-            using BinaryWriter writer = new BinaryWriter(mem, Encoding.UTF8, true);
-            writer.Write(header_3_4.Magic);
-            writer.Write(header_3_4.ZeroByte);
-            writer.Write((byte)header_3_4.ComprMode);
-            writer.Write(header_3_4.Size);
-            writer.Write(header_3_4.Reserved);
-            mem.Seek(offset: 0, loc: SeekOrigin.Begin);
-
+            header_3_4.Size = 0xF3F3;
+            using (MemoryStream mem = Write(header_3_4))
             {
                 Serialization.SEALHeader loaded = new Serialization.SEALHeader();
                 Serialization.LoadHeader(mem, loaded);
                 Assert.IsTrue(Serialization.IsValidHeader(loaded));
                 Assert.AreEqual(header_3_4.ComprMode, loaded.ComprMode);
-                Assert.AreEqual(header_3_4.Size, loaded.Size);
-                mem.Seek(offset: 0, loc: SeekOrigin.Begin);
+                Assert.AreEqual((ulong)header_3_4.Size, loaded.Size);
             }
+            using (MemoryStream mem = Write(header_3_4))
             {
+                // No upgrade requested
                 Serialization.SEALHeader loaded = new Serialization.SEALHeader();
                 Serialization.LoadHeader(mem, loaded, false);
                 Assert.IsFalse(Serialization.IsValidHeader(loaded));
-                mem.Seek(offset: 0, loc: SeekOrigin.Begin);
+            }
+
+            // Data without the magic number and zero byte of a 3.4 header is not upgraded
+            LegacyHeaders.SEALHeader_3_4 badMagic = new LegacyHeaders.SEALHeader_3_4();
+            badMagic.Set(header_3_4);
+            badMagic.Magic = 0x1234;
+            LegacyHeaders.SEALHeader_3_4 badZeroByte = new LegacyHeaders.SEALHeader_3_4();
+            badZeroByte.Set(header_3_4);
+            badZeroByte.ZeroByte = 1;
+            foreach (LegacyHeaders.SEALHeader_3_4 bad in new[] { badMagic, badZeroByte })
+            {
+                using (MemoryStream mem = Write(bad))
+                {
+                    Serialization.SEALHeader loaded = new Serialization.SEALHeader();
+                    Serialization.LoadHeader(mem, loaded);
+                    Assert.IsFalse(Serialization.IsValidHeader(loaded));
+                }
             }
         }
-*/
         [TestMethod]
         public void ExceptionsTest()
         {

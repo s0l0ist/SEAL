@@ -16,7 +16,7 @@ endif()
 #   4. SEAL C++ tests                             #
 ###################################################
 
-project(SEAL VERSION 4.4.5 LANGUAGES CXX C)
+project(SEAL VERSION 4.7.2 LANGUAGES CXX C)
 
 # [option] CMAKE_BUILD_TYPE (default: "Release")
 # Build in one of the following modes: Release, Debug, MinSizeRel, or RelWithDebInfo.
@@ -50,6 +50,11 @@ include(CheckSymbolExists)
 # Extra modules
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR}/cmake)
 include(SEALMacros)
+
+# Microsoft SEAL requires a little-endian platform; see native/src/seal/util/defines.h.
+if(CMAKE_CXX_BYTE_ORDER STREQUAL "BIG_ENDIAN")
+    message(FATAL_ERROR "Microsoft SEAL requires a little-endian platform")
+endif()
 
 # Always build position-independent-code.
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -149,9 +154,12 @@ else()
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 endif()
 
-# Install
-set(SEAL_CONFIG_INSTALL_DIR ${CMAKE_INSTALL_LIBDIR}/cmake/SEAL-${SEAL_VERSION_MAJOR}.${SEAL_VERSION_MINOR})
-set(SEAL_INCLUDES_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR}/SEAL-${SEAL_VERSION_MAJOR}.${SEAL_VERSION_MINOR})
+# Install. The install directories and library names have no version number, so different versions of Microsoft SEAL
+# cannot be installed side by side. Headers of carried dependencies go to seal/thirdparty, where they cannot overwrite
+# other installations.
+set(SEAL_CONFIG_INSTALL_DIR ${CMAKE_INSTALL_LIBDIR}/cmake/SEAL)
+set(SEAL_INCLUDES_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR})
+set(SEAL_THIRDPARTY_INCLUDES_INSTALL_DIR ${SEAL_INCLUDES_INSTALL_DIR}/seal/thirdparty)
 
 # pkg-config
 set(SEAL_PKGCONFIG_IN_DIR ${CMAKE_CURRENT_LIST_DIR}/pkgconfig)
@@ -195,9 +203,13 @@ if(SEAL_USE_MSGSL)
         message(STATUS "Microsoft GSL: download ...")
         seal_fetch_thirdparty_content(ExternalMSGSL)
     else()
-        find_package(Microsoft.GSL 4 CONFIG)
+        # Microsoft.GSL's version file only accepts the same major version, so
+        # request no version here and check the minimum below.
+        find_package(Microsoft.GSL CONFIG)
         if(NOT Microsoft.GSL_FOUND)
             message(FATAL_ERROR "Microsoft GSL: not found")
+        elseif(Microsoft.GSL_VERSION VERSION_LESS 4)
+            message(FATAL_ERROR "Microsoft GSL: found ${Microsoft.GSL_VERSION}, but 4.0 or newer is required")
         else()
             message(STATUS "Microsoft GSL: found")
         endif()
@@ -315,13 +327,6 @@ set_property(CACHE SEAL_DEFAULT_PRNG PROPERTY
     STRINGS "Blake2xb" "Shake256")
 mark_as_advanced(FORCE SEAL_DEFAULT_PRNG)
 
-# [option] SEAL_AVOID_BRANCHING (default: OFF)
-# Avoid branching in critical conditional move operations if set to ON, use faster method if set to OFF.
-set(SEAL_AVOID_BRANCHING_STR "Use an always branching-free conditional move")
-option(SEAL_AVOID_BRANCHING ${SEAL_AVOID_BRANCHING_STR} OFF)
-message(STATUS "SEAL_AVOID_BRANCHING: ${SEAL_AVOID_BRANCHING}")
-mark_as_advanced(FORCE SEAL_AVOID_BRANCHING)
-
 # [option] SEAL_USE_INTRIN (default: ON)
 set(SEAL_USE_INTRIN_OPTION_STR "Use intrinsics")
 option(SEAL_USE_INTRIN ${SEAL_USE_INTRIN_OPTION_STR} ON)
@@ -347,7 +352,6 @@ install(
 # Build only a static library
 if(NOT BUILD_SHARED_LIBS)
     add_library(seal STATIC ${SEAL_SOURCE_FILES})
-    seal_set_version_filename(seal)
     seal_set_language(seal)
     seal_set_include_directories(seal)
     if(CMAKE_CONFIGURATION_TYPES)
@@ -360,7 +364,9 @@ if(NOT BUILD_SHARED_LIBS)
 
     if(SEAL_USE_MSGSL)
         if(SEAL_BUILD_DEPS)
-            target_include_directories(seal PUBLIC $<BUILD_INTERFACE:${msgsl_SOURCE_DIR}/include>)
+            target_include_directories(seal PUBLIC
+                $<BUILD_INTERFACE:${msgsl_SOURCE_DIR}/include>
+                $<INSTALL_INTERFACE:${SEAL_THIRDPARTY_INCLUDES_INSTALL_DIR}>)
         else()
             target_link_libraries(seal PUBLIC Microsoft.GSL::GSL)
         endif()
@@ -426,7 +432,9 @@ else()
 
     if(SEAL_USE_MSGSL)
         if(SEAL_BUILD_DEPS)
-            target_include_directories(seal_shared PUBLIC $<BUILD_INTERFACE:${msgsl_SOURCE_DIR}/include>)
+            target_include_directories(seal_shared PUBLIC
+                $<BUILD_INTERFACE:${msgsl_SOURCE_DIR}/include>
+                $<INSTALL_INTERFACE:${SEAL_THIRDPARTY_INCLUDES_INSTALL_DIR}>)
         else()
             target_link_libraries(seal_shared PUBLIC Microsoft.GSL::GSL)
         endif()
@@ -502,28 +510,27 @@ if(SEAL_BUILD_SEAL_C)
         message(FATAL_ERROR "SEAL_C requires `SEAL_BUILD_DEPS=ON`")
     endif()
 
-    # Preconditions that don't depend on the config:
-    if(UNIX AND SEAL_USE_INTEL_HEXL AND NOT SEAL_BUILD_STATIC_SEAL_C)
-        # Emit warning at build-time only for Debug
-        add_custom_command(TARGET sealc POST_BUILD
-            COMMAND $<$<CONFIG:Debug>:${CMAKE_COMMAND}> -E cmake_echo_color --yellow --bold
-                    "[SEAL WARNING] SEAL_C (shared) cannot find Address Sanitizer (libasan) enabled by Intel HEXL in Debug "
-                    "mode on Unix-like systems. SEALNet does not work. Preload libasan for downstream applications."
-            COMMAND_EXPAND_LISTS)
-    endif()
-
     if(SEAL_BUILD_STATIC_SEAL_C)
         add_library(sealc STATIC)
     else()
         add_library(sealc SHARED)
     endif()
 
+    # Preconditions that don't depend on the config:
+    if(UNIX AND SEAL_USE_INTEL_HEXL AND NOT SEAL_BUILD_STATIC_SEAL_C)
+        # Emit warning at build-time only for Debug; in other configurations the whole command expands to nothing
+        string(CONCAT SEAL_C_WARNING
+            "[SEAL WARNING] SEAL_C (shared) cannot find Address Sanitizer (libasan) enabled by Intel HEXL in Debug "
+            "mode on Unix-like systems. SEALNet does not work. Preload libasan for downstream applications.")
+        add_custom_command(TARGET sealc POST_BUILD
+            COMMAND "$<$<CONFIG:Debug>:${CMAKE_COMMAND};-E;cmake_echo_color;--yellow;--bold;${SEAL_C_WARNING}>"
+            COMMAND_EXPAND_LISTS VERBATIM)
+    endif()
+
     # Add source files to library and header files to install
     add_subdirectory(${SEAL_INCLUDES_DIR}/seal/c)
     seal_set_version(sealc)
-    if(SEAL_BUILD_STATIC_SEAL_C)
-        seal_set_version_filename(sealc)
-    else()
+    if(NOT SEAL_BUILD_STATIC_SEAL_C)
         seal_set_soversion(sealc)
     endif()
     seal_set_language(sealc)
@@ -587,7 +594,7 @@ if(SEAL_BUILD_DEPS)
     if(SEAL_USE_MSGSL)
         install(
             DIRECTORY ${msgsl_SOURCE_DIR}/include/gsl
-            DESTINATION ${SEAL_INCLUDES_INSTALL_DIR})
+            DESTINATION ${SEAL_THIRDPARTY_INCLUDES_INSTALL_DIR})
     endif()
 endif()
 
@@ -597,6 +604,7 @@ endif()
 
 if(UNIX OR APPLE)
     # Set the requirements according to the current configuration if SEAL_BUILD_DEPS=OFF
+    set(SEAL_PKGCONFIG_REQUIRES)
     if(NOT SEAL_BUILD_DEPS)
         if(SEAL_USE_MSGSL)
             # Extract the include directories from Microsoft.GSL::GSL
@@ -608,18 +616,34 @@ if(UNIX OR APPLE)
             # Create the Microsoft GSL pkg-config file
             configure_file(${SEAL_PKGCONFIG_MSGSL_IN_FILENAME} ${SEAL_PKGCONFIG_MSGSL_FILENAME} @ONLY)
 
-            set(SEAL_PKGCONFIG_MSGSL_REQUIRES_STRING "seal_msgsl >= ${Microsoft.GSL_VERSION_MAJOR}")
+            list(APPEND SEAL_PKGCONFIG_REQUIRES "seal_msgsl >= ${Microsoft.GSL_VERSION_MAJOR}")
         endif()
         if(SEAL_USE_ZLIB)
-            set(SEAL_PKGCONFIG_ZLIB_REQUIRES_STRING "zlib >= ${ZLIB_VERSION_STRING}")
+            list(APPEND SEAL_PKGCONFIG_REQUIRES "zlib >= ${ZLIB_VERSION_STRING}")
         endif()
         if(SEAL_USE_ZSTD)
-            set(SEAL_PKGCONFIG_ZSTD_REQUIRES_STRING "libzstd >= ${zstd_VERSION_MAJOR}")
+            list(APPEND SEAL_PKGCONFIG_REQUIRES "libzstd >= ${zstd_VERSION_MAJOR}")
         endif()
         if(SEAL_USE_INTEL_HEXL)
-            set(SEAL_PKGCONFIG_INTEL_HEXL_REQUIRES_STRING "hexl >= ${HEXL_VERSION_MAJOR}")
-            message(STATUS "Intel HEXL does not have a pkg-config file")
+            list(APPEND SEAL_PKGCONFIG_REQUIRES "hexl >= ${HEXL_VERSION_MAJOR}")
         endif()
+    endif()
+    # A pkg-config file can have only one Requires field
+    list(JOIN SEAL_PKGCONFIG_REQUIRES ", " SEAL_PKGCONFIG_REQUIRES_STRING)
+
+    # The install directories relative to the prefix, unless they are absolute
+    foreach(dir LIBDIR INCLUDEDIR)
+        if(IS_ABSOLUTE "${CMAKE_INSTALL_${dir}}")
+            set(SEAL_PKGCONFIG_${dir} "${CMAKE_INSTALL_${dir}}")
+        else()
+            set(SEAL_PKGCONFIG_${dir} "\${prefix}/${CMAKE_INSTALL_${dir}}")
+        endif()
+    endforeach()
+
+    # Microsoft GSL headers carried with SEAL_BUILD_DEPS=ON are in seal/thirdparty
+    set(SEAL_PKGCONFIG_THIRDPARTY_CFLAGS)
+    if(SEAL_BUILD_DEPS AND SEAL_USE_MSGSL)
+        set(SEAL_PKGCONFIG_THIRDPARTY_CFLAGS " -I\${includedir}/seal/thirdparty")
     endif()
 
     # Create the pkg-config file

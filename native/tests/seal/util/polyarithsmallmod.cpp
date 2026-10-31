@@ -4,9 +4,12 @@
 #include "seal/util/defines.h"
 #include "seal/util/polyarithsmallmod.h"
 #include "seal/util/polycore.h"
+#include "seal/util/uintarithsmallmod.h"
 #include "seal/util/uintcore.h"
 #include <cstddef>
 #include <cstdint>
+#include <random>
+#include <vector>
 #include "gtest/gtest.h"
 
 using namespace seal;
@@ -879,6 +882,302 @@ namespace sealtest
                 ASSERT_EQ(7ULL, result[1][1][2]);
                 ASSERT_EQ(1ULL, result[1][1][3]);
             }
+        }
+
+        namespace
+        {
+            vector<Modulus> kernel_test_moduli()
+            {
+                return { Modulus(2),
+                         Modulus(3),
+                         Modulus(4),
+                         Modulus(65537),
+                         Modulus(uint64_t(1) << 32),
+                         Modulus(0xffffffffffc0001ULL),
+                         Modulus(0x1fffffffffe00001ULL),
+                         Modulus((uint64_t(1) << 61) - 1) };
+            }
+
+            // The dyadic products need at least one coefficient; the other functions also accept none
+            const vector<size_t> kernel_test_sizes{ 1, 2, 7, 64, 1001 };
+            const vector<size_t> kernel_test_sizes_with_zero{ 0, 1, 2, 7, 64, 1001 };
+
+            // Bound on unreduced operands
+            uint64_t lazy_operand_bound(const Modulus &modulus)
+            {
+#ifdef SEAL_USE_INTEL_HEXL
+                return modulus.value() << 2;
+#else
+                (void)modulus;
+                return 0;
+#endif
+            }
+
+            // Extreme and random values less than bound, or any if bound is zero
+            vector<uint64_t> kernel_test_operand(size_t n, uint64_t bound, mt19937_64 &rng)
+            {
+                vector<uint64_t> values(n);
+                for (size_t i = 0; i < n; i++)
+                {
+                    uint64_t x = (i % 4 == 0) ? ~uint64_t(0) : (i % 4 == 1 ? 0 : rng());
+                    values[i] = bound ? (i % 4 == 0 ? bound - 1 : x % bound) : x;
+                }
+                return values;
+            }
+
+            uint64_t reference_multiply_mod(uint64_t x, uint64_t y, const Modulus &modulus)
+            {
+                unsigned long long z[2];
+                multiply_uint64(x, y, z);
+                return barrett_reduce_128(z, modulus);
+            }
+        } // namespace
+
+        TEST(PolyArithSmallMod, ModuloPolyCoeffsRandom)
+        {
+            mt19937_64 rng(31337);
+            for (const Modulus &modulus : kernel_test_moduli())
+            {
+                for (size_t n : kernel_test_sizes_with_zero)
+                {
+                    vector<uint64_t> a = kernel_test_operand(n, 0, rng), out(n);
+                    modulo_poly_coeffs(a.data(), n, modulus, out.data());
+                    for (size_t i = 0; i < n; i++)
+                    {
+                        ASSERT_EQ(a[i] % modulus.value(), out[i]);
+                    }
+
+                    modulo_poly_coeffs(a.data(), n, modulus, a.data());
+                    ASSERT_EQ(out, a);
+                }
+            }
+        }
+
+        TEST(PolyArithSmallMod, AddSubPolyScalarCoeffModRandom)
+        {
+            mt19937_64 rng(31339);
+            for (const Modulus &modulus : kernel_test_moduli())
+            {
+                uint64_t p = modulus.value();
+                for (size_t n : kernel_test_sizes_with_zero)
+                {
+                    vector<uint64_t> a = kernel_test_operand(n, p, rng), sum(n), diff(n);
+                    for (uint64_t scalar : { uint64_t(0), uint64_t(1), p - 1, uint64_t(rng()) % p })
+                    {
+                        add_poly_scalar_coeffmod(a.data(), n, scalar, modulus, sum.data());
+                        sub_poly_scalar_coeffmod(a.data(), n, scalar, modulus, diff.data());
+                        for (size_t i = 0; i < n; i++)
+                        {
+                            ASSERT_EQ((a[i] + scalar) % p, sum[i]);
+                            ASSERT_EQ((a[i] + p - scalar) % p, diff[i]);
+                        }
+
+                        vector<uint64_t> in_place = a;
+                        add_poly_scalar_coeffmod(in_place.data(), n, scalar, modulus, in_place.data());
+                        ASSERT_EQ(sum, in_place);
+                        in_place = a;
+                        sub_poly_scalar_coeffmod(in_place.data(), n, scalar, modulus, in_place.data());
+                        ASSERT_EQ(diff, in_place);
+                    }
+                }
+            }
+        }
+
+        TEST(PolyArithSmallMod, AddSubNegatePolyCoeffModRandom)
+        {
+            // Every length up to 70 covers every remainder of the vector loops
+            vector<size_t> sizes;
+            for (size_t n = 0; n <= 70; n++)
+            {
+                sizes.push_back(n);
+            }
+            sizes.push_back(1001);
+
+            mt19937_64 rng(31340);
+            for (const Modulus &modulus : kernel_test_moduli())
+            {
+                const uint64_t p = modulus.value();
+                for (size_t n : sizes)
+                {
+                    const vector<uint64_t> a = kernel_test_operand(n, p, rng);
+                    vector<uint64_t> b = kernel_test_operand(n, p, rng);
+                    for (size_t i = 0; i < n; i += 3)
+                    {
+                        // Sums equal to p, and equal operands
+                        b[i] = (i % 2) ? (p - a[i]) % p : a[i];
+                    }
+
+                    vector<uint64_t> sum(n), diff(n), neg(n);
+                    add_poly_coeffmod(a.data(), b.data(), n, modulus, sum.data());
+                    sub_poly_coeffmod(a.data(), b.data(), n, modulus, diff.data());
+                    negate_poly_coeffmod(a.data(), n, modulus, neg.data());
+                    for (size_t i = 0; i < n; i++)
+                    {
+                        ASSERT_EQ((a[i] + b[i]) % p, sum[i]);
+                        ASSERT_EQ((a[i] + p - b[i]) % p, diff[i]);
+                        ASSERT_EQ((p - a[i]) % p, neg[i]);
+                    }
+
+                    // The result may be either operand
+                    vector<uint64_t> in_place = a;
+                    add_poly_coeffmod(in_place.data(), b.data(), n, modulus, in_place.data());
+                    ASSERT_EQ(sum, in_place);
+                    in_place = b;
+                    add_poly_coeffmod(a.data(), in_place.data(), n, modulus, in_place.data());
+                    ASSERT_EQ(sum, in_place);
+                    in_place = a;
+                    sub_poly_coeffmod(in_place.data(), b.data(), n, modulus, in_place.data());
+                    ASSERT_EQ(diff, in_place);
+                    in_place = b;
+                    sub_poly_coeffmod(a.data(), in_place.data(), n, modulus, in_place.data());
+                    ASSERT_EQ(diff, in_place);
+                    in_place = a;
+                    negate_poly_coeffmod(in_place.data(), n, modulus, in_place.data());
+                    ASSERT_EQ(neg, in_place);
+                }
+            }
+        }
+
+        TEST(PolyArithSmallMod, MultiplyPolyScalarCoeffModRandom)
+        {
+            mt19937_64 rng(31338);
+            for (const Modulus &modulus : kernel_test_moduli())
+            {
+                uint64_t p = modulus.value();
+                for (size_t n : kernel_test_sizes_with_zero)
+                {
+                    vector<uint64_t> a = kernel_test_operand(n, lazy_operand_bound(modulus), rng), out(n);
+                    for (uint64_t scalar : { uint64_t(0), uint64_t(1), p - 1, ~uint64_t(0), uint64_t(rng()) })
+                    {
+                        multiply_poly_scalar_coeffmod(a.data(), n, scalar, modulus, out.data());
+                        for (size_t i = 0; i < n; i++)
+                        {
+                            ASSERT_EQ(reference_multiply_mod(a[i], scalar % p, modulus), out[i]);
+                        }
+
+                        vector<uint64_t> in_place = a;
+                        multiply_poly_scalar_coeffmod(in_place.data(), n, scalar, modulus, in_place.data());
+                        ASSERT_EQ(out, in_place);
+                    }
+                }
+            }
+        }
+
+        TEST(PolyArithSmallMod, DyadicProductCoeffModRandom)
+        {
+            mt19937_64 rng(31339);
+            for (const Modulus &modulus : kernel_test_moduli())
+            {
+                for (size_t n : kernel_test_sizes)
+                {
+                    vector<uint64_t> a = kernel_test_operand(n, lazy_operand_bound(modulus), rng);
+                    vector<uint64_t> b = kernel_test_operand(n, lazy_operand_bound(modulus), rng);
+                    vector<uint64_t> ref(n), out(n);
+                    for (size_t i = 0; i < n; i++)
+                    {
+                        ref[i] = reference_multiply_mod(a[i], b[i], modulus);
+                    }
+
+                    dyadic_product_coeffmod(a.data(), b.data(), n, modulus, out.data());
+                    ASSERT_EQ(ref, out);
+
+                    // The result may alias either operand
+                    out = a;
+                    dyadic_product_coeffmod(out.data(), b.data(), n, modulus, out.data());
+                    ASSERT_EQ(ref, out);
+                    out = b;
+                    dyadic_product_coeffmod(a.data(), out.data(), n, modulus, out.data());
+                    ASSERT_EQ(ref, out);
+                }
+            }
+        }
+
+        TEST(PolyArithSmallMod, DyadicProductAddCoeffMod)
+        {
+            mt19937_64 rng(31340);
+            for (const Modulus &modulus : kernel_test_moduli())
+            {
+                uint64_t p = modulus.value();
+                for (size_t n : kernel_test_sizes)
+                {
+                    vector<uint64_t> a = kernel_test_operand(n, lazy_operand_bound(modulus), rng);
+                    vector<uint64_t> b = kernel_test_operand(n, p, rng);
+                    vector<uint64_t> c = kernel_test_operand(n, p, rng);
+                    vector<uint64_t> ref(n), out(n);
+                    for (size_t i = 0; i < n; i++)
+                    {
+                        ref[i] = (reference_multiply_mod(a[i], b[i], modulus) + c[i]) % p;
+                    }
+
+                    dyadic_product_add_coeffmod(a.data(), b.data(), c.data(), n, modulus, out.data());
+                    ASSERT_EQ(ref, out);
+
+                    // The result may alias operand1 or operand2
+                    out = a;
+                    dyadic_product_add_coeffmod(out.data(), b.data(), c.data(), n, modulus, out.data());
+                    ASSERT_EQ(ref, out);
+                    out = b;
+                    dyadic_product_add_coeffmod(a.data(), out.data(), c.data(), n, modulus, out.data());
+                    ASSERT_EQ(ref, out);
+                }
+            }
+#ifdef SEAL_DEBUG
+            // operand2 and addend must be reduced
+            Modulus modulus(65537);
+            vector<uint64_t> a{ 1, 2 }, b{ 3, 4 }, c{ 5, 6 }, out(2);
+            ASSERT_NO_THROW(dyadic_product_add_coeffmod(a.data(), b.data(), c.data(), 2, modulus, out.data()));
+
+            b[1] = modulus.value();
+            ASSERT_THROW(
+                dyadic_product_add_coeffmod(a.data(), b.data(), c.data(), 2, modulus, out.data()), invalid_argument);
+
+            b[1] = 4;
+            c[0] = modulus.value();
+            ASSERT_THROW(
+                dyadic_product_add_coeffmod(a.data(), b.data(), c.data(), 2, modulus, out.data()), invalid_argument);
+#endif
+        }
+
+        TEST(PolyArithSmallMod, DyadicProductSharedCoeffMod)
+        {
+            mt19937_64 rng(31341);
+            for (const Modulus &modulus : kernel_test_moduli())
+            {
+                uint64_t p = modulus.value();
+                for (size_t n : kernel_test_sizes)
+                {
+                    vector<uint64_t> a1 = kernel_test_operand(n, lazy_operand_bound(modulus), rng);
+                    vector<uint64_t> a2 = kernel_test_operand(n, lazy_operand_bound(modulus), rng);
+                    vector<uint64_t> b = kernel_test_operand(n, p, rng);
+                    vector<uint64_t> ref1(n), ref2(n), out1(n), out2(n);
+                    for (size_t i = 0; i < n; i++)
+                    {
+                        ref1[i] = reference_multiply_mod(a1[i], b[i], modulus);
+                        ref2[i] = reference_multiply_mod(a2[i], b[i], modulus);
+                    }
+
+                    dyadic_product_shared_coeffmod(
+                        a1.data(), a2.data(), b.data(), n, modulus, out1.data(), out2.data());
+                    ASSERT_EQ(ref1, out1);
+                    ASSERT_EQ(ref2, out2);
+
+                    // result1 may alias operand1, and result2 operand2
+                    out1 = a1;
+                    out2 = a2;
+                    dyadic_product_shared_coeffmod(
+                        out1.data(), out2.data(), b.data(), n, modulus, out1.data(), out2.data());
+                    ASSERT_EQ(ref1, out1);
+                    ASSERT_EQ(ref2, out2);
+                }
+            }
+#ifdef SEAL_DEBUG
+            // shared must be reduced
+            Modulus modulus(65537);
+            vector<uint64_t> a1{ 1, 2 }, a2{ 3, 4 }, b{ 5, modulus.value() }, out1(2), out2(2);
+            ASSERT_THROW(
+                dyadic_product_shared_coeffmod(a1.data(), a2.data(), b.data(), 2, modulus, out1.data(), out2.data()),
+                invalid_argument);
+#endif
         }
     } // namespace util
 } // namespace sealtest

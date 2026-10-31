@@ -103,8 +103,6 @@ namespace seal
 
         auto &context_data = *context_.get_context_data(parms_id);
         auto &parms = context_data.parms();
-        size_t coeff_modulus_size = parms.coeff_modulus().size();
-        size_t coeff_count = parms.poly_modulus_degree();
         bool is_ntt_form = false;
 
         if (parms.scheme() == scheme_type::ckks || parms.scheme() == scheme_type::bgv)
@@ -130,29 +128,31 @@ namespace seal
                 auto &prev_parms_id = prev_context_data.parms_id();
                 auto rns_tool = prev_context_data.rns_tool();
 
+                // Fresh pool with `clear_on_destruction', as the zero encryption masks the plaintext
+                MemoryPoolHandle safe_pool = MemoryManager::GetPool(mm_prof_opt::mm_force_new, true);
+
                 // Zero encryption without modulus switching
-                Ciphertext temp(pool);
+                Ciphertext temp(safe_pool);
                 util::encrypt_zero_asymmetric(public_key_, context_, prev_parms_id, is_ntt_form, temp);
 
                 // Modulus switching
                 SEAL_ITERATE(iter(temp, destination), temp.size(), [&](auto I) {
                     if (parms.scheme() == scheme_type::ckks)
                     {
-                        rns_tool->divide_and_round_q_last_ntt_inplace(
-                            get<0>(I), prev_context_data.small_ntt_tables(), pool);
+                        rns_tool->divide_and_round_q_last_ntt(
+                            get<0>(I), prev_context_data.small_ntt_tables(), get<1>(I), safe_pool);
                     }
                     // bfv switch-to-next
                     else if (parms.scheme() == scheme_type::bfv)
                     {
-                        rns_tool->divide_and_round_q_last_inplace(get<0>(I), pool);
+                        rns_tool->divide_and_round_q_last(get<0>(I), get<1>(I), safe_pool);
                     }
                     // bgv switch-to-next
                     else if (parms.scheme() == scheme_type::bgv)
                     {
-                        rns_tool->mod_t_and_divide_q_last_ntt_inplace(
-                            get<0>(I), prev_context_data.small_ntt_tables(), pool);
+                        rns_tool->mod_t_and_divide_q_last_ntt(
+                            get<0>(I), prev_context_data.small_ntt_tables(), get<1>(I), safe_pool);
                     }
-                    set_poly(get<0>(I), coeff_count, coeff_modulus_size, get<1>(I));
                 });
 
                 destination.parms_id() = parms_id;
@@ -270,15 +270,9 @@ namespace seal
                 SEAL_ALLOCATE_ZERO_GET_RNS_ITER(temp, coeff_modulus_size, coeff_count, pool);
 
                 SEAL_ITERATE(iter(plain_copy.data(), temp), plain_coeff_count, [&](auto I) {
-                    auto plain_value = get<0>(I);
-                    if (plain_value >= plain_upper_half_threshold)
-                    {
-                        add_uint(plain_upper_half_increment, coeff_modulus_size, plain_value, get<1>(I));
-                    }
-                    else
-                    {
-                        *get<1>(I) = plain_value;
-                    }
+                    add_if_ge_uint(
+                        get<0>(I), plain_upper_half_threshold, plain_upper_half_increment, coeff_modulus_size,
+                        get<1>(I));
                 });
 
                 context_data.rns_tool()->base_q()->decompose_array(temp, coeff_count, pool);
@@ -299,7 +293,7 @@ namespace seal
                 SEAL_ITERATE(helper_iter, coeff_modulus_size, [&](auto I) {
                     SEAL_ITERATE(iter(*plain_iter, get<0>(I)), plain_coeff_count, [&](auto J) {
                         get<1>(J) =
-                            SEAL_COND_SELECT(get<0>(J) >= plain_upper_half_threshold, get<0>(J) + get<1>(I), get<0>(J));
+                            select_uint64(get<0>(J) >= plain_upper_half_threshold, get<0>(J) + get<1>(I), get<0>(J));
                     });
                 });
             }

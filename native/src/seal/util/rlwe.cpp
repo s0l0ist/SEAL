@@ -55,7 +55,7 @@ namespace seal
                 0, global_variables::noise_standard_deviation, global_variables::noise_max_deviation);
 
             SEAL_ITERATE(iter(destination), coeff_count, [&](auto &I) {
-                int64_t noise = static_cast<int64_t>(dist(engine));
+                int64_t noise = static_cast<int64_t>(round(dist(engine)));
                 uint64_t flag = static_cast<uint64_t>(-static_cast<int64_t>(noise < 0));
                 SEAL_ITERATE(
                     iter(StrideIter<uint64_t *>(&I, coeff_count), coeff_modulus), coeff_modulus_size,
@@ -118,7 +118,9 @@ namespace seal
             for (size_t j = 0; j < coeff_modulus_size; j++)
             {
                 auto &modulus = coeff_modulus[j];
-                uint64_t max_multiple = max_random - barrett_reduce_64(max_random, modulus) - 1;
+
+                // The largest multiple of modulus that fits in 64 bits
+                uint64_t max_multiple = max_random - barrett_reduce_64(max_random, modulus);
                 transform(destination, destination + coeff_count, destination, [&](uint64_t rand) {
                     // This ensures uniform distribution
                     while (rand >= max_multiple)
@@ -231,16 +233,31 @@ namespace seal
             for (size_t i = 0; i < coeff_modulus_size; i++)
             {
                 ntt_negacyclic_harvey(u.get() + i * coeff_count, ntt_tables[i]);
-                for (size_t j = 0; j < encrypted_size; j++)
+
+                // Two public key components at a time, sharing u
+                size_t j = 0;
+                for (; j + 2 <= encrypted_size; j += 2)
+                {
+                    dyadic_product_shared_coeffmod(
+                        public_key.data().data(j) + i * coeff_count, public_key.data().data(j + 1) + i * coeff_count,
+                        u.get() + i * coeff_count, coeff_count, coeff_modulus[i], destination.data(j) + i * coeff_count,
+                        destination.data(j + 1) + i * coeff_count);
+                }
+
+                // The remaining public key component, if any
+                for (; j < encrypted_size; j++)
                 {
                     dyadic_product_coeffmod(
                         u.get() + i * coeff_count, public_key.data().data(j) + i * coeff_count, coeff_count,
                         coeff_modulus[i], destination.data(j) + i * coeff_count);
+                }
 
-                    // Addition with e_0, e_1 is in non-NTT form
-                    if (!is_ntt_form)
+                // Addition with e_0, e_1 is in non-NTT form
+                if (!is_ntt_form)
+                {
+                    for (size_t k = 0; k < encrypted_size; k++)
                     {
-                        inverse_ntt_negacyclic_harvey(destination.data(j) + i * coeff_count, ntt_tables[i]);
+                        inverse_ntt_negacyclic_harvey(destination.data(k) + i * coeff_count, ntt_tables[i]);
                     }
                 }
             }
