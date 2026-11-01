@@ -25,8 +25,8 @@ foreach(_seal_path_var SEAL_TARGET_ARCHIVE SEAL_DEPENDENCY_ARCHIVE SEAL_WORK_DIR
     string(REPLACE "\\" "/" ${_seal_path_var} "${${_seal_path_var}}")
 endforeach()
 
-# Extract into a dedicated directory so that unrelated object files in the library output
-# directory are never swept into the archive.
+# Extract only the dependency. Extracting the target would overwrite distinct objects
+# with the same basename, such as SEAL's plaintext.cpp.o and its binding's plaintext.cpp.o.
 get_filename_component(_seal_target_name "${SEAL_TARGET_ARCHIVE}" NAME_WLE)
 get_filename_component(_seal_dependency_name "${SEAL_DEPENDENCY_ARCHIVE}" NAME_WLE)
 set(_seal_extract_dir "${SEAL_WORK_DIR}/${_seal_target_name}-${_seal_dependency_name}.objs")
@@ -34,27 +34,26 @@ set(_seal_extract_dir "${SEAL_WORK_DIR}/${_seal_target_name}-${_seal_dependency_
 file(REMOVE_RECURSE "${_seal_extract_dir}")
 file(MAKE_DIRECTORY "${_seal_extract_dir}")
 
-foreach(_seal_archive "${SEAL_TARGET_ARCHIVE}" "${SEAL_DEPENDENCY_ARCHIVE}")
-    execute_process(
-        COMMAND "${SEAL_AR_COMMAND}" x "${_seal_archive}"
-        WORKING_DIRECTORY "${_seal_extract_dir}"
-        RESULT_VARIABLE _seal_result
-        ERROR_VARIABLE _seal_error)
-    if(NOT _seal_result EQUAL 0)
-        file(REMOVE_RECURSE "${_seal_extract_dir}")
-        message(FATAL_ERROR "Failed to extract ${_seal_archive}: ${_seal_result} ${_seal_error}")
-    endif()
-endforeach()
+execute_process(
+    COMMAND "${SEAL_AR_COMMAND}" x "${SEAL_DEPENDENCY_ARCHIVE}"
+    WORKING_DIRECTORY "${_seal_extract_dir}"
+    RESULT_VARIABLE _seal_result
+    ERROR_VARIABLE _seal_error)
+if(NOT _seal_result EQUAL 0)
+    file(REMOVE_RECURSE "${_seal_extract_dir}")
+    message(FATAL_ERROR "Failed to extract ${SEAL_DEPENDENCY_ARCHIVE}: ${_seal_result} ${_seal_error}")
+endif()
 
 file(GLOB _seal_objects LIST_DIRECTORIES false RELATIVE "${_seal_extract_dir}"
     "${_seal_extract_dir}/*.o" "${_seal_extract_dir}/*.obj")
 if(NOT _seal_objects)
     file(REMOVE_RECURSE "${_seal_extract_dir}")
-    message(FATAL_ERROR "No object files extracted from ${SEAL_TARGET_ARCHIVE} and ${SEAL_DEPENDENCY_ARCHIVE}")
+    message(FATAL_ERROR "No object files extracted from ${SEAL_DEPENDENCY_ARCHIVE}")
 endif()
 
+# Append rather than replace members so matching basenames in the target survive.
 execute_process(
-    COMMAND "${SEAL_AR_COMMAND}" rcs "${SEAL_TARGET_ARCHIVE}" ${_seal_objects}
+    COMMAND "${SEAL_AR_COMMAND}" qcs "${SEAL_TARGET_ARCHIVE}" ${_seal_objects}
     WORKING_DIRECTORY "${_seal_extract_dir}"
     RESULT_VARIABLE _seal_result
     ERROR_VARIABLE _seal_error)
