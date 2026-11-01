@@ -22,7 +22,23 @@ set(SEAL_SOURCE_FILES ${SEAL_SOURCE_FILES}
 )
 
 if(EMSCRIPTEN)
-    list(APPEND SEAL_SOURCE_FILES ${CMAKE_CURRENT_LIST_DIR}/bindings.cpp)
+    list(APPEND SEAL_SOURCE_FILES
+        ${CMAKE_CURRENT_LIST_DIR}/bindings/base64.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/bindings/ciphertext.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/bindings/context.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/bindings/encoders.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/bindings/encryption.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/bindings/encryptionparameters.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/bindings/evaluator.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/bindings/helpers.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/bindings/keygenerator.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/bindings/keys.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/bindings/memory.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/bindings/moduli.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/bindings/plaintext.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/bindings/types.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/bindings/utilhashfunction.cpp
+    )
 endif()
 
 # Add header files for installation
@@ -56,13 +72,6 @@ install(
     DESTINATION
         ${SEAL_INCLUDES_INSTALL_DIR}/seal
 )
-
-if(EMSCRIPTEN)
-    install(
-        FILES ${CMAKE_CURRENT_LIST_DIR}/base64.h
-        DESTINATION ${SEAL_INCLUDES_INSTALL_DIR}/seal
-    )
-endif()
 
 add_subdirectory(util)
 set(SEAL_SOURCE_FILES ${SEAL_SOURCE_FILES} PARENT_SCOPE)
