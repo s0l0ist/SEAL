@@ -1,31 +1,10 @@
 // Licensed under the MIT license.
 
 #include "seal/bindings/helpers.h"
-#include <cmath>
 
 using namespace emscripten;
 using namespace seal;
 using namespace seal::bindings;
-
-namespace
-{
-    std::vector<double> ckksValuesFromTypedArray(const val &data, double scale)
-    {
-        if (!std::isfinite(scale))
-        {
-            throw std::invalid_argument("scale must be finite");
-        }
-        auto values = vectorFromTypedArray<double>(data, "Float64Array");
-        for (double value : values)
-        {
-            if (!std::isfinite(value))
-            {
-                throw std::invalid_argument("values must be finite");
-            }
-        }
-        return values;
-    }
-} // namespace
 
 EMSCRIPTEN_BINDINGS(seal_encoders)
 {
@@ -82,13 +61,13 @@ EMSCRIPTEN_BINDINGS(seal_encoders)
         .function(
             "encode", optional_override(
                           [](const CKKSEncoder &self, const emscripten::val &v, double scale, Plaintext &destination) {
-                              auto values = ckksValuesFromTypedArray(v, scale);
+                              auto values = vectorFromTypedArray<double>(v, "Float64Array");
                               self.encode(values, scale, destination);
                           }))
         .function(
             "encodeWithPool", optional_override([](const CKKSEncoder &self, const emscripten::val &v, double scale,
                                                    Plaintext &destination, const MemoryPoolHandle &pool) {
-                auto values = ckksValuesFromTypedArray(v, scale);
+                auto values = vectorFromTypedArray<double>(v, "Float64Array");
                 self.encode(values, scale, destination, pool);
             }))
         .function("decodeFloat64", optional_override([](const CKKSEncoder &self, const Plaintext &plain) {
